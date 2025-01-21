@@ -1,0 +1,104 @@
+
+ods graphics on;
+proc logistic data=t1_m desc plots=(all);
+	class  internalfacilitysk sex;
+	model SNFStaysWithReadmits = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
+		year_2021 year_2022 year_2023 q1 q2 q3 q4 internalfacilitysk;
+run;
+ods graphics off;
+
+/*********************************************Period 2 *******************************************/
+/*Import Data 07/01/2023-06/30/2024 data*/
+proc sql;
+	create table t2_m as 
+		(select *
+			from db.vw_DRP_companyxHealth_2
+				where LOB = 'Medicare'
+					and Region in ('San Francisco','East Bay'));
+
+/************************************TP2 Numerical Measures****************************************/
+
+proc ttest data=t2_m;
+	class companyxhealth;
+	var lengthofstay;
+run;
+
+proc sgplot data=t2_m;
+	histogram lengthofstay;
+run;
+
+/*Log Transformation*/
+data t2_m;
+	set t2_m;
+	log_LOS = log(lengthofstay);
+run;
+
+proc sgplot data=t2_m;
+	histogram log_LOS;
+run;
+
+ods graphics on;
+proc glm data=t2_m plots=(all);
+	class sex internalfacilitysk;
+	model log_LOS = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
+		year_2023 year_2024 q1 q2 q3 q4 internalfacilitysk/ solution clparm;
+run;
+ods graphics off;
+
+proc genmod data=t2_m;
+	class   sex internalfacilitysk;
+	model log_LOS = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
+		year_2023 year_2024 q1 q2 q3 q4  internalfacilitysk / dist=normal link=identity;
+run;
+/*MODEL FIT proc genmod: value/df (good fit < 1)*/
+
+
+/*********************************TP2 Categorical Measures**********************************************/
+/*Readmit During SNF Stay*/
+
+proc means data=t2_m N MEAN STDDEV;
+	VAR SNFStaysWithReadmits;
+	CLASS companyxHealth;
+run;
+
+proc logistic data=t2_m desc;
+	class sex  internalfacilitysk;
+	model SNFStaysWithReadmits = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
+		year_2023 year_2024 q1 q2 q3 q4 internalfacilitysk;
+run;
+
+/***Original data in Nov without auth backend regional data issue***/
+
+proc sql;
+	create table clean_m2 as 
+		(select *
+			from db.drp_companyx_auth_test
+				where LOB = 'Medicare'
+					and Region in ('San Francisco','East Bay'));
+
+proc ttest data=clean_m2;
+	class companyxhealth;
+	var lengthofstay;
+run;
+
+data clean_m2
+	set clean_m2;
+	log_LOS = log(lengthofstay);
+run;
+
+proc glm data=clean_m2;
+	class sex internalfacilitysk;
+	model log_LOS = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
+		year_2023 year_2024 q1 q2 q3 q4 internalfacilitysk/ solution clparm;
+run;
+
+proc means data=clean_m2 N MEAN STDDEV;
+	VAR SNFStaysWithReadmits;
+	CLASS companyxHealth;
+run;
+
+proc logistic data=clean_m2 desc;
+	class sex  internalfacilitysk;
+	model SNFStaysWithReadmits = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
+		year_2023 year_2024 q1 q2 q3 q4 internalfacilitysk;
+run;
