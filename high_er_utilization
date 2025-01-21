@@ -1,0 +1,309 @@
+declare	@clms_start		date = convert(date,dateadd(mm,-12,getdate())),
+		@clms_end		date = convert(date,getdate()),
+		@incurred_date	date = convert(date,dateadd(mm, datediff(mm, 0, getdate())-1, 0));
+
+
+drop table if exists #start
+select distinct MasterPatientID
+, sum ([ER Visit]) as 'Total ER Visits'
+into #start
+from server.db.[dbo].ClaimDetails
+where 1=1
+and [Date of Service Date] between @clms_start and @clms_end
+and [ER Visit] = 1	
+and MasterPatientID is not null
+and [Claim Adj Type Description] in ('original','replacement')
+and [Clm Status Type] in ('rejected','approved')
+group by MasterPatientID
+having sum ([ER Visit]) >= 3
+order by 'Total ER Visits' desc
+
+--select count (*) Cnt_Rws, count (distinct masterpatientid) Dcnt_Pt, sum([Total ER Visits]) Sum_ER
+--from #start
+--3,944 Rows
+--3,944 Distinct MasterPatientID's
+--17,399 ER Visits
+
+
+drop table if exists #elig_1
+select case when LineOfBusinessName = 'Commercial' then 1
+	when LineOfBusinessName = 'Medicare' then 2
+	when LineOfBusinessName = 'Medi-Cal' then 3
+	else 4 end as LOB_Order
+, e.MasterPatientID
+, e.[Mbr MRN]
+,[Patient Full Name]
+,[Patient First Name]
+,[Patient M Initial]
+,[Patient Last Name]
+,[Patient DOB]
+,[Patient Address 1]
+,[Patient City]
+,[Patient State]
+,[Patient Zip]
+,[Patient Gender]
+,datediff(YYYY,[Patient DOB],getdate()) as Age
+,[Member Region Name]
+,[Mbr HMOID] 
+,[HealthPlanShortCode]
+,[HealthPlanName] as 'Health Plan'
+,e.[LineOfBusinessName] as 'Line of Business'
+,[Medi-MediFlag]
+,[BusinessGroup1]
+,[BusinessGroup2]
+,[BusinessGroup3]
+,[ProductCode]
+,[ProductName]
+,[SubProductName]
+,SubProductCode
+,case when SubProductCode = 'LKK' then 'Yes' else 'No' end as 'LKK'
+,[AidCategoryCode]
+,[AidCategoryDesc]
+,[HMO Assigned Provider Master Vendor Name] 
+,[HMO Assigned Provider Proper Name] as 'HMO Assigned Provider'
+,[HMO Assigned Provider Tax ID]
+into #elig_1
+from #start s
+left join server.db.[dbo].EligibilityDetails e
+on s.MasterPatientID = e.MasterPatientID
+where 1=1
+and [Incurred Date] = @incurred_date								
+and ActiveMemberFlag = 1	
+and e.MasterPatientID is not null
+
+--select count (*) Cnt_Rws, count(distinct MasterPatientID) Dcnt_Pt
+--from #elig_1
+--3,430 Rows
+--3,346 Distinct MasterPatientID's
+
+
+drop table if exists #elig_2
+select row_number () over (partition by masterpatientid order by lob_order asc) rn
+, *
+into #elig_2
+from #elig_1
+
+
+drop table if exists #elig_3
+select *
+into #elig_3
+from #elig_2
+where rn = 1
+
+--select count (*) Cnt_Rws, count(distinct MasterPatientID) Dcnt_Pt
+--from #elig_3
+--3,346 Rows
+--3,346 Distinct MasterPatientID's
+
+
+drop table if exists #clms
+select distinct [Date of Service Date] as 'DOS'
+,datename(dw,[Date of Service Date]) as 'DOW' 
+,h.MasterPatientID
+,concat([Claim Number],[Claim Line]) as Clm_Nmbr_Line
+,[Claim Number]
+,[Claim Line]
+,[Specialty Division Code]
+,[Servicing Provider Division Code]
+,[POS Code]
+,[Procedure Code]
+,ltrim(RTRIM([Procedure Code Short Description]))Procedure_Code_Short_Description
+,Isnull([Diag1],'') 'Diag 1',Isnull([DX1_ShortDesc],'') 'DX1 ShortDesc'     
+,Isnull([Diag2],'')Diag2,Isnull([DX2_ShortDesc],'') DX2_ShortDesc       
+,Isnull([Diag3],'')Diag3,Isnull([DX3_ShortDesc] ,'') DX3_ShortDesc    
+,[ER Visit]
+,[ER Frequent Flyer]
+,[UCC Eligible Flag]
+,[Servicing Provider Proper Name] as 'Servicing Provider'
+,[Servicing Provider NPI]
+,case 
+when[LOB Code]= 'c' then 'Commercial'
+when[LOB Code]= 'l' then 'Medi_Cal'
+when[LOB Code]= 'm' then 'Medicare'
+when[LOB Code]= 'o' then 'Other'
+when [LOB Code]='u' then 'Unknown'
+else '' end LOB_Name
+,QNXT_Box32_FacilityName as Facility_Name
+,[Servicing Facility Name]
+,case when [Servicing Provider Division Code] not in ('XRAY', 'LABR', 'FACL','EMER' ) and [POS Code] in ('11','20','49','50','02','10','2') then 1 else 0 end as 'PCP or Specialist Visit'
+,case when [Servicing Provider Division Code] not in ('XRAY', 'LABR', 'FACL','EMER' ) and [POS Code] in ('11','20','49','50','02','10','2') then datediff(dd,[Date of Service Date],getdate()) else null end as 'Days Since PCP or Specialist'
+into #clms
+from #elig_3 h
+left join server.db.[dbo].ClaimDetails c
+on h.MasterPatientID = c.MasterPatientID
+where 1=1											
+and [Date of Service Date] between @clms_start and @clms_end	
+and [Claim Adj Type Description] in ('original','replacement')
+and [Clm Status Type] in ('rejected','approved')
+and c.MasterPatientID is not null
+order by DOS asc
+
+--select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt, sum ([ER Visit]) Sum_ER
+--from #clms
+--323,538 Rows
+--3,346 Distinct Master PatientID's
+--14,684 ER Visits
+
+
+drop table if exists #most_recent_1
+select max(DOS) as 'Date of Last PCP or Specialist'
+, MasterPatientID
+, datediff(dd,max(DOS),@clms_end) as 'Days Since Last PCP or Specialist'
+, [Servicing Provider] 'Last Seen Provider'
+, row_number () over (partition by masterpatientid order by datediff(dd,max(DOS),@clms_end)) rn
+into #most_recent_1
+from #clms
+where 1=1
+and [PCP or Specialist Visit] = 1
+group by MasterPatientID
+, [Servicing Provider]
+order by MasterPatientID asc, [Days Since Last PCP or Specialist] asc
+
+
+drop table if exists #most_recent
+select *
+into #most_recent
+from #most_recent_1
+where rn = 1
+
+
+--select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
+--from #most_recent
+--2,901 Rows
+--2,901 Distinct MasterPatientID's
+
+
+
+drop table if exists #em0
+select row_number () over (partition by e.MasterPatientID order by e.[Incurred Date] desc) row_num
+, lag(convert(date,e.[Incurred Date]), 1) over (partition by e.MasterPatientID order by convert(date,e.[Incurred Date])) Preceding_Date
+, lead(convert(date,e.[Incurred Date]), 1) over (partition by e.MasterPatientID order by convert(date,e.[Incurred Date])) Succeeding_Date
+, convert(date,e.[Incurred Date]) as Incurred_Date
+, e.[Incurred Date]
+, a.MasterPatientID
+into #em0
+from #elig_3 a
+left join server.db.[dbo].EligibilityDetails e
+on a.MasterPatientID = e.MasterPatientID
+
+--select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
+--from #em0
+--107,592 Rows
+--3,346 Distinct MasterPatientID's
+
+
+
+drop table if exists #em1
+select datediff(mm,Preceding_Date,Incurred_Date) as date_diff
+, *
+into #em1
+from #em0
+
+--select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
+--from #em1
+--107,592 Rows
+--3,346 Distinct MasterPatientID's
+
+
+
+drop table if exists #em2
+select case when Succeeding_Date is null then Incurred_Date else null end as Period_End 
+,      case when date_diff > 1 then Incurred_Date when Preceding_Date is null then Incurred_Date else null end as Period_Start
+, *
+into #em2
+from #em1
+
+--select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
+--from #em2
+--107,592 Rows
+--3,346 Distinct MasterPatientID's
+
+
+
+drop table if exists #elig_months
+select max(period_start) 'Start of Eligibility', max(period_end) as 'Most Recent Eligibility'
+,MasterPatientID
+,datediff(mm,max(period_start),max(period_end))+1 as 'Continuous Months of Eligibility'
+into #elig_months
+from #em2
+group by MasterPatientID
+
+--select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
+--from #elig_months
+--3,346 Rows
+--3,346 Distinct MasterPatientID's
+
+
+drop table if exists #cm
+select EnterpriseID Patient
+, cast(EncounterEntryDateTime as date) 'CM Encounter Entry Date'
+, cast(EncounterCloseDateTime as date) 'CM Encounter Close Date'
+, row_number () over (partition by EnterpriseID order by cast(EncounterEntryDateTime as date) desc) Row_Num 
+, EpisodeID 'CM Episode ID'
+, EpisodeClassification 'CM Episode Class.'
+, EpisodeUserName
+into #cm
+from [dwsqlp1prod].EPIC_Reporting.dbo.EncountersCompleteInfo 
+where 1=1
+and EnterpriseID is not null	
+and EpisodeClassification in ('HP High-Risk Care Management', 'HP Transitional Care Management', 'CM - Welcome Home')
+
+
+drop table if exists #case_mgmt
+select *
+, datediff(d,[CM Encounter Entry Date],getdate()) as 'Days Since Last CM'
+into #case_mgmt
+from #cm
+where 1=1
+and Row_Num = 1
+
+
+
+drop table if exists #final
+select distinct
+ c.*
+, e.[Patient Full Name]
+, e.[Patient First Name]
+, e.[Patient M Initial]
+, e.[Patient Last Name]
+, e.[Patient DOB]
+, e.[Mbr MRN]
+, e.age
+, e.[Member Region Name]
+, e.[Health Plan]
+, e.[Line of Business]
+, e.[Medi-MediFlag]
+, e.BusinessGroup1
+, e.SubProductCode
+, e.LKK
+, e.AidCategoryCode
+, e.[HMO Assigned Provider]
+, e.[HMO Assigned Provider Tax ID]
+, em.[Continuous Months of Eligibility]
+, m.[Last Seen Provider]
+, m.[Date of Last PCP or Specialist]
+, m.[Days Since Last PCP or Specialist]
+, cm.*
+into #final
+from #clms c
+left join #elig_3 e
+on c.MasterPatientID = e.MasterPatientID
+left join #elig_months em
+on c.MasterPatientID = em.MasterPatientID
+left join #most_recent m
+on c.MasterPatientID = m.MasterPatientID
+left join #case_mgmt cm
+on c.MasterPatientID = cm.Patient
+
+
+select count (distinct masterpatientid) as dcnt_masterptid
+, sum ([ER Visit]) as sum_ervisits
+, count (*) as row_cnt
+from #final
+--3,661 pts
+--16,158 er visits
+--374,988 rows
+
+
+--select *
+--from #final
