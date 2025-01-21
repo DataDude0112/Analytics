@@ -1,0 +1,981 @@
+/*Baseline 202204 - 202403*/
+/*Monitoring 202404 - 202409*/
+
+data baseline_time;
+	monitorend = '30SEP2024'd;	/* ADD end of monitoring period date*/
+	baselinestart = intnx('month', monitorend, -29, 'B');
+	format monitorend baselinestart date9.;
+	call symputx('baseline_start',baselinestart);
+run;
+%put &=baseline_start;
+
+options validvarname=v7; 		    /*DBMS column name will be changed to valid SAS name (SAS 7 and later)*/;
+%LET specialty=GAST;                /*EDIT*/
+%LET prov_dwnld_date=202409;        /*EDIT*/ /*library.Providers_202409_GAST*/ /*Convert NPI to string while importing*/
+%LET auth_codes_date=20241127;      /*EDIT*/ /*library.AUTH_CODES_20241127*/ 
+%LET monitor_end=202409;            /*EDIT*/ /*last year-month of GR period */
+
+*NAR = no authorization required;
+*AA = Electronically Approve unless POS 11 then NAR;
+proc sql;
+	create table AA_NAR_codes as  
+		select * 
+			from library.AUTH_CODES_&auth_codes_date
+				where Description not like '%INACTIVE%'
+					and (Code__level = 'NAR' or Code__level = 'AA');
+quit; /*6,962*/
+
+/*GRAB PATIENT LISTS SEEN BY PROVIDER DURING MONITORING & BASELINE PERIOD*/
+proc sql;
+	create table members_seen_&specialty as 
+		select distinct Servicing_Provider_NPI
+			, Date_of_Service_YearMonth
+			, input(cats(Date_of_Service_YearMonth, '01'), yymmdd8.) as DOS_YM format=date9.
+			, MasterPatientID
+		from db.ClaimDetails
+			where 1=1
+				and MasterPatientID is not null
+				and Servicing_Provider_NPI in (select provider_npi from library.Providers_&prov_dwnld_date._&specialty) 
+				and ( procedure_code between '99201' and '99215' 	/*start of E&M code filter*/
+				or procedure_code between '99381' and '99397'
+				or procedure_code in ('G0402', 'G0438', 'G0439')
+				or procedure_code between '99401' and '99404'
+				or procedure_code between '99441' and '99443'
+				or procedure_code between '99341' and '99350'
+				or procedure_code in ('92002' , '92004', '92010', '92012', '92014', '92015') 
+				or procedure_code between '99241' and '99245' 
+				or procedure_code in ('59426','59425','59400')) 
+				and &baseline_start <= input(cats(Date_of_Service_YearMonth, '01'), yymmdd8.) <= intnx('month', &baseline_start, 29)
+			order by Servicing_Provider_NPI, Date_of_Service_YearMonth;
+quit; /*40,481*/
+
+/*COUNT DISTINCT MASTER PT ID FOR EACH PROVIDER BY MONTH*/
+proc sql;
+	create table members_by_month_&specialty as 
+		select distinct Servicing_Provider_NPI
+			, Date_of_Service_YearMonth
+			, DOS_YM
+			, count(distinct MasterPatientID) as member_count
+		from members_seen_&specialty
+			group by Servicing_Provider_NPI, Date_of_Service_YearMonth;
+quit; /*3,157*/
+
+/* Assign 6-month buckets 
+	4 baseline periods (B1-B4)
+	1 monitoring period (M), the latest 6-mo period (less 3 mo claim runout)*/
+Data month_buckets_&specialty;
+	set members_by_month_&specialty;
+
+	if &baseline_start <= DOS_YM <= intnx('month', &baseline_start, 5) then
+		bucket='Members_B1';
+
+	if intnx('month', &baseline_start, 6) <= DOS_YM <= intnx('month', &baseline_start, 11) then
+		bucket='Members_B2';
+
+	if intnx('month', &baseline_start, 12) <= DOS_YM <= intnx('month', &baseline_start, 17) then
+		bucket='Members_B3';
+
+	if intnx('month', &baseline_start, 18) <= DOS_YM <= intnx('month', &baseline_start, 23) then
+		bucket='Members_B4';
+
+	if intnx('month', &baseline_start, 24) <= DOS_YM <= intnx('month', &baseline_start, 29) then
+		bucket='Members_M';
+run; /*3,157*/
+
+/* SUM UP THE TOTAL MEMBERS FOR EACH NPI/BUCKET */
+proc sql;
+	create table members_month_buckets_&specialty as 
+		select Servicing_Provider_NPI
+			, bucket
+			, sum(member_count) as member_sum
+			, count(bucket) as valid_months /*total number months in each bucket*/
+	from month_buckets_&specialty
+		where bucket NE ''
+			group by Servicing_Provider_NPI, bucket;
+quit; /*581*/
+
+
+/*Reshape from long to wide, with bucket labels as columns
+	displaying Num members per NPI (row) and bucket (column)*/
+PROC TRANSPOSE DATA=WORK.members_month_buckets_&specialty
+	OUT=WORK.transposed_&specialty(LABEL="Transposed WORK.MEMBERS_MONTH_BUCKETS_&specialty")
+	NAME=Source
+	LABEL=Label;
+	BY Servicing_Provider_NPI;
+	ID bucket;
+	VAR member_sum;
+run; /*118*/
+
+data transposed_mem_&specialty;
+	set transposed_&specialty;
+
+	/*** Set all missing values for members seen from claims to 0 ***/
+	array change _numeric_;
+
+	do over change;
+		if change=. then
+			change=0;
+	end;
+
+	drop Source;
+run; /*118*/
+
+/*Flag incl_mon for providers with members in monitoring period*/
+data claims_&specialty;
+	set transposed_mem_&specialty;
+
+	if Members_M >0 then
+		incl_mon = 1;
+	else incl_mon= 0;
+run; /*118*/
+
+
+/* ************************************************************ */
+/* ************************ AUTHS ***************************** */
+/* ************************************************************ */
+
+proc sql;
+	create table sasuser.gr_codes_&specialty as  
+		select * 
+			from library.GR_CODES_&specialty
+				where code_level not like '%INACTIVE%';
+run; /*571*/
+
+proc sql;
+	create table AuthData_&specialty as
+		SELECT DISTINCT A.ReferredFromProviderNPI
+			, A.ReferredFromProviderProperName
+			, A.MasterPatientID
+			, LEFT(TRIM(A.PatientLName)||', '||(A.PatientFName)) as Member
+			, A.PatientDOB
+			, A.PatientGender
+			, A.ValidFromDate
+			, intnx('month',A.ValidFromDate,0,'B') as VFD_YM format=date9.
+			, cats(strip(put(year(A.ValidFromDate), 11.))
+			, cats(repeat('0', 1-length(strip(put(month(A.ValidFromDate), 11.))))
+			, strip(put(month(A.ValidFromDate), 11.)))) 
+		as ValidFromDate_YearMonth
+			, A.CPT1
+			, A.CPT1_Desc
+			, A.CPT2
+			, A.CPT2_Desc
+			, A.CPT3
+			, A.CPT3_Desc
+			, A.CPT4
+			, A.CPT4_Desc
+			, A.CPT5
+			, A.CPT5_Desc
+			, A.CPT6
+			, A.CPT6_Desc
+			, A.DX1
+			, A.DX1_Desc
+			, A.DX2
+			, A.DX2_Desc
+			, A.DX3
+			, A.DX3_Desc
+			, A.DX4
+			, A.DX4_Desc
+			, A.DX5
+			, A.DX5_Desc
+			, A.DX6
+			, A.DX6_Desc
+			, A.AuthNumber
+			, A.authstatusdescription
+			, A.AuthStatusName
+			, A.AuthCategoryName
+			, cat(A.ReferredFromProviderNPI, substr(A.MasterPatientID,1,10), A.ValidFromDate
+			, A.CPT1, A.CPT2, A.CPT3, A.CPT4, A.CPT5, A.CPT6)
+		as AuthID /*Added for unique ID deduping AuthNumber when submitted
+			multiple times */
+	FROM db.AuthDetails A
+		WHERE 1=1
+			AND (  CPT1 IN (select code from sasuser.gr_codes_&specialty) /*At least one CPT code listed on an authorization must be part of the platinum role*/
+			OR CPT2 IN (select code from sasuser.gr_codes_&specialty)
+			OR CPT3 IN (select code from sasuser.gr_codes_&specialty)
+			OR CPT4 IN (select code from sasuser.gr_codes_&specialty)
+			OR CPT5 IN (select code from sasuser.gr_codes_&specialty)
+			OR CPT6 IN (select code from sasuser.gr_codes_&specialty) )
+			AND ReferredFromProviderNPI IN (select provider_npi from library.Providers_&prov_dwnld_date._&specialty)
+			AND POSCODE in ('11', '19', '22', '24', '50')
+			AND authstatusdescription not in ('CANCELED', 'Duplicate Referral Request', 'Withdrawn')
+		HAVING intnx('month',A.ValidFromDate,0,'B') >= &baseline_start and intnx('month',A.ValidFromDate,0,'B') <= intnx('month', &baseline_start, 29) 
+			order by a.masterpatientid asc;
+quit; /*33,122*/
+
+/*Besides GR codes, any additional procedure codes on auth must be either AA or NAR for auto-approval*/
+proc sql;
+	create table AuthData_&specialty.2 as
+		select *
+			from AuthData_&specialty
+				where 1=1
+					and  CPT1 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes) 
+					and (CPT2 = ''  or CPT2 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes))
+					and (CPT3 = ''  or CPT3 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes))
+					and (CPT4 = ''  or CPT4 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes))
+					and (CPT4 = ''  or CPT4 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes))
+					and (CPT5 = ''  or CPT5 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes))
+					and (CPT6 = ''  or CPT6 in (select code from sasuser.gr_codes_&specialty union select procedure_code from AA_NAR_codes));
+quit; /*25,112*/
+
+/*Review frequency of included CPT1*/
+proc freq data=authdata_&specialty.2;
+	table CPT1_Desc ValidFromDate_YearMonth;
+run;
+
+/*Save Auth list for deep dives*/
+/*only include auths for members seen in baseline or monitoring period*/
+proc sql;
+	create table library.&specialty._&monitor_end._auths as
+		select * from AuthData_&specialty.2
+			where 1=1 
+				and cat(ReferredFromProviderNPI, MasterPatientID) /*cat() concatenates strings w/space in btw*/
+	in (select distinct cat(Servicing_Provider_NPI, MasterPatientID) from members_seen_&specialty) 
+	order by ReferredFromProviderNPI, MasterPatientID, VFD_YM;
+quit; /*17,740*/
+
+/*COUNT THE AUTHS NUMBER PER MONTH FOR EACH PROVIDER*/
+/*only count auths for members seen in baseline or monitoring period*/
+proc sql;
+	create table auths_by_month_&specialty as
+		select distinct ReferredFromProviderNPI
+			, ValidFromDate_YearMonth
+			, VFD_YM
+			, count(distinct AuthID) as total_auths
+		from AuthData_&specialty.2
+			where 1=1 
+				and cat(ReferredFromProviderNPI, MasterPatientID) /*cat() concatenates strings w/space in btw*/
+	in (select distinct cat(Servicing_Provider_NPI, MasterPatientID) from members_seen_&specialty)
+	group by ReferredFromProviderNPI, VFD_YM;
+quit; /*2,562*/
+
+/*GRAB AUTHS BY PROVIDER FOR MEMBERS NOT SEEN IN MONITORING PERIOD
+	AUTHS WITH VALIDFROMDATEs IN MONITORING PERIOD ONLY 	*/
+proc sql;
+	create table sasuser.auths_notseen_&specialty as
+		select *
+			from AuthData_&specialty.2
+				where 1=1 
+					and VFD_YM >= intnx('month', &baseline_start, 24) /* ADDED TO RESTRICT TO MONITORING PERIOD*/
+					and VFD_YM <= intnx('month', &baseline_start, 29) /* ADDED TO RESTRICT TO MONITORING PERIOD*/
+					and (cat(ReferredFromProviderNPI, MasterPatientID) 
+						not in (select distinct cat(Servicing_Provider_NPI, MasterPatientID) from members_seen_&specialty) )
+				order by ReferredFromProviderNPI, MasterPatientID, ValidFromDate;
+quit; /*7,372*/
+
+/*COUNT AUTHS BY PROVIDER BY MONTH FOR MEMBERS NOT SEEN IN MONITORING PERIOD*/
+proc sql;
+	create table auths_notseen_mo_&specialty as
+		select distinct ReferredFromProviderNPI
+			, min(ReferredFromProviderProperName) as Provider_Name
+			, ValidFromDate_YearMonth
+			, VFD_YM
+			, count(*) as Auths
+		from sasuser.auths_notseen_&specialty
+			group by ReferredFromProviderNPI, VFD_YM
+				order by provider_name, ValidFromDate_YearMonth asc;
+quit; /*1,549*/
+
+/*COUNT AUTHS BY PROVIDER IN MONITORING PERIOD FOR MEMBERS NOT SEEN IN MONITORING PERIOD*/
+	/* Merge the providers' region and practice group */
+proc sql;
+	create table auths_notseen_gr_&specialty as
+		select distinct ReferredFromProviderNPI
+			, min(Provider_Name) as Provider_Name
+			, min(A2.Region) as Region
+			, min(A2.Practice_group_name) as Practice_Group
+			, sum(Auths) as Auths
+		from auths_notseen_mo_&specialty C1
+			left join library.Providers_&prov_dwnld_date._&specialty A2 
+				on C1.ReferredFromProviderNPI = A2.provider_NPI
+			where 1=1
+				and VFD_YM >= intnx('month', &baseline_start, 24)
+				and VFD_YM <= intnx('month', &baseline_start, 29)
+			group by ReferredFromProviderNPI
+				order by provider_name asc;
+quit; /*87*/
+
+/*ASSIGN MONTHS TO TIME PERIODS in Baseline and Monitoring
+	Give diff naming convention bc when reshape, will represent 
+	Num of auths per NPI-bucket, whereas prevous bucket labels
+	B1, B2 etc. represent Num of members seen per NPI-bucket*/
+Data auth_buckets_&specialty;
+	set auths_by_month_&specialty;
+
+	if &baseline_start <= VFD_YM <= intnx('month', &baseline_start, 5) then
+		bucket='Auths_B1';
+
+	if intnx('month', &baseline_start, 6) <= VFD_YM <= intnx('month', &baseline_start, 11) then
+		bucket='Auths_B2';
+
+	if intnx('month', &baseline_start, 12) <= VFD_YM <= intnx('month', &baseline_start, 17) then
+		bucket='Auths_B3';
+
+	if intnx('month', &baseline_start, 18) <= VFD_YM <= intnx('month', &baseline_start, 23) then
+		bucket='Auths_B4';
+
+	if intnx('month', &baseline_start, 24) <= VFD_YM <= intnx('month', &baseline_start, 29) then
+		bucket='Auths_M';
+run; /*2,562*/
+
+/*SUM UP AUTHS NUMBER FOR EACH PROVIDER BY TIME PERIOD*/
+proc sql;
+	create table auths_by_bucket_&specialty as
+		select distinct ReferredFromProviderNPI
+			, bucket
+			, sum(total_auths) as tot_auths
+		from auth_buckets_&specialty
+			where bucket NE ''
+				group by ReferredFromProviderNPI, bucket;
+quit; /*541*/
+
+/*Reshape from long to wide by bucket (columns), NPI as rows*/;
+PROC TRANSPOSE DATA=WORK.auths_by_bucket_&specialty
+	OUT=WORK.auths_transposed_&specialty(LABEL="Transposed WORK.AUTHS_BY_BUCKET_&specialty")
+	NAME=Source
+	LABEL=Label;
+	BY ReferredFromProviderNPI;
+	ID bucket;
+	VAR tot_auths;
+run; /*113*/
+
+data transposed_auths_&specialty;
+	set auths_transposed_&specialty;
+
+	/*** Set all missing values for num. auths to 0 ***/
+	array change _numeric_;
+
+	do over change;
+		if change=. then
+			change=0;
+	end;
+
+	drop Source;
+run; /*113*//* providers have auths sometime in baseline or monitoring period*/
+
+/* Combine Auths table with Member/claims table*/
+proc sql;
+	create table auths_members_&specialty as 
+		select a.*,b.*
+			from claims_&specialty a 
+				left join transposed_auths_&specialty b
+					on a.Servicing_Provider_NPI = b.ReferredFromProviderNPI;
+quit; /*118*/
+
+data auths_members_&specialty.2;
+	set auths_members_&specialty;
+	array change _numeric_;
+
+	do over change;
+		if change=. then
+			change=0;
+	end;
+
+	if incl_mon NE 0; /* Remove providers who had no patients in the monitoring period*/
+run; /*115*/
+
+/* Merge the providers' names */
+proc sql;
+	create table auths_mem_&specialty as
+		select LEFT(TRIM(A2.last_name)||', '||(A2.first_name)) as Provider_Name
+			, A2.Specialty_Name, A2.Specialty_Code, A2.Region, A2.Practice_group_name
+			, C1.*
+		from auths_members_&specialty.2 C1 
+			left join library.Providers_&prov_dwnld_date._&specialty A2 
+				on C1.Servicing_Provider_NPI = A2.provider_NPI;
+quit; /*115*/
+
+/*remove created duplicates*/
+proc sort data=auths_mem_&specialty nodupkey;
+	by Servicing_Provider_NPI;
+run; /*115*/
+
+/*Calculate Auths per member seen for each period bucket*/
+/*Update the time period in lists*/
+data auths_mem_&specialty.2;
+	set auths_mem_&specialty;
+	array members {5} Members_B1-Members_B4 Members_M;
+	array auths {5} Auths_B1-Auths_B4 Auths_M;
+	array auths_member {5} Auths_PM_B1-Auths_PM_B4 Auths_PM_M;
+
+	do i = 1 to 5;
+		auths_member{i} = auths{i}/members{i};
+	end;
+
+	drop i;
+run; /*115*/
+
+/*Select columns for final data set before clustering*/
+proc sql;
+	create table Auths_per_member_&specialty as
+		select distinct servicing_provider_npi as Provider_NPI
+			, min(Provider_Name) as Provider_Name
+			, min(Practice_Group_Name) as Practice_Group_Name
+			, min(Specialty_Name) as Specialty_Name
+			, min(Specialty_Code) as Specialty_Code
+			, min(Region) as Region
+			, Members_B1, Members_B2, Members_B3, Members_B4, Members_M
+			, Auths_B1,Auths_B2, Auths_B3, Auths_B4, Auths_M
+			, Auths_PM_B1, Auths_PM_B2, Auths_PM_B3, Auths_PM_B4, Auths_PM_M
+			, (Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) / (Members_B1 + Members_B2 + Members_B3 + Members_B4) as Avg_Auths_PM_B
+			, sqrt( ( Members_B1 * (Auths_PM_B1 - (Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) / (Members_B1 + Members_B2 + Members_B3 + Members_B4) )**2 
+			+ Members_B2 * (Auths_PM_B2 - (Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) / (Members_B1 + Members_B2 + Members_B3 + Members_B4) )**2
+			+ Members_B3 * (Auths_PM_B3 - (Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) / (Members_B1 + Members_B2 + Members_B3 + Members_B4) )**2
+			+ Members_B4 * (Auths_PM_B4 - (Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) / (Members_B1 + Members_B2 + Members_B3 + Members_B4) )**2	 
+			) / (Members_B1 + Members_B2 + Members_B3 + Members_B4) ) as SD_Auths_PM_B 
+		from auths_mem_&specialty.2
+			group by servicing_provider_npi,
+				Members_B1, Members_B2, Members_B3, Members_B4, Members_M,
+				Auths_B1, Auths_B2, Auths_B3, Auths_B4, Auths_M,
+				Auths_PM_B1, Auths_PM_B2, Auths_PM_B3, Auths_PM_B4, Auths_PM_M;
+quit; /*115*/
+
+
+/**********************CLUSTERING****************/
+
+title 'Cluster Analysis of Member and Auths per Member';
+   ods graphics on;
+
+%macro analyze(method,ncl); /*ncl is number of clusters*/
+  proc cluster data=auths_per_member_&specialty outtree=tree method=&method print=15 ccc pseudo;
+	 id provider_npi;
+	 var Members_M Auths_PM_M; 
+	 title2;
+  run;
+
+/* In the %WHILE condition, a null string is indicated by the absence of any nonblank characters between the comparison operator (NE) and the right parenthesis that terminates the condition.*/
+
+  %let k=1; /*macro variable &K is a counter that indexes the numbers within &NCL*/
+  %let n=%scan(&ncl,&k); /*The %SCAN function picks out the kth number in &NCL, 
+  						which is then assigned to the macro variable &N. 
+  						When &K exceeds the number of numbers in &NCL, 
+  						%SCAN returns a null string.*/
+
+ /*The %DO loop processes &NCL, the list of numbers of clusters to plot.
+  The %DO loop executes while &N is not equal to a null string*/
+  %do %while(&n NE);
+
+     proc tree data=tree noprint out=out ncl=&n;
+        copy Members_M Auths_PM_M; /* Need to select the platinum rule period*/
+     run;
+
+     proc sgplot;
+        scatter y=Auths_PM_M x=Members_M / group=cluster markerchar=cluster; /* Need to select the platinum rule period*/
+		yaxis label='Auths per member';
+		xaxis label='Member counts';
+		title2 "Plot of &n Clusters from METHOD=&METHOD";
+     run;
+
+     %let k=%eval(&k+1);
+     %let n=%scan(&ncl,&k);
+  %end;
+%mend analyze;
+
+/* Perform cluster analysis with varying number of clusters */;
+/*%analyze(WARD, 2 3 4 5);*/ /*Ward’s minimum-variance with 2, 3, and 4 clusters. */
+
+
+/*%analyze(AVERAGE, 2 3 4 5); /*Average linkage (UPGMA, unweighted pair group 
+						method with arithmetic mean)*/
+/*%analyze(SINGLE, 2 3 4 5); /*single linkage (nearest neighbor)*/
+/*%analyze(DENSITY K=10, 2 3 4 5); /*complete linkage (furthest neighbor)*/
+
+
+
+ /*** K-MEANS ***/
+/*  %macro k_means(ncl);
+  %let k=1;
+  %let n=%scan(&ncl,&k);
+  %do %while(&n NE); 
+
+	proc fastclus data=auths_per_member_&specialty out=auths_per_mem_cluster_&specialty maxc=&n;
+      var Members_M Auths_PM_M; 
+      title "FASTCLUS Analysis of Member and Auths per Member: &n Clusters";
+	run;
+   
+	proc sgplot;
+	  scatter y=Auths_PM_M x=Members_M / group=cluster markerchar=cluster;   
+	  yaxis label='Auths per member';
+	  xaxis label='Member counts';
+	run;
+
+	%let k=%eval(&k+1);
+    %let n=%scan(&ncl,&k);
+  %end;
+%mend k_means;
+
+%k_means(2 3 4)
+;*/
+
+/*=== Run code above to decide which method and number of clusters to use ===*/
+/*======= Based on visual inspection of scatter plots =======================*/
+/*============= and the R-Square >= 0.75 and semipartial R-Square <= 0.1 ======*/
+%analyze(WARD, 3); /*EDIT to cluster number selected */
+/*clusters = 3 is smallest number to meet criteria 
+	R-Square >= 0.75 and semipartial R-Square <= 0.1
+	BUT only 1 providers in cluster 3 -- outlier with high volume*/
+
+/* ************************************************************************************* */
+/* **************** Merge the cluster numbers to the original data set ***************** */
+/* ************************************************************************************* */
+/* ================ No need to run the code below if use K-means ================= */
+proc sql;
+	create table auths_per_mem_cluster_&specialty as
+		select a.*, b.cluster
+			from auths_per_member_&specialty a
+				inner join out b
+					on a.provider_npi = b._NAME_;
+quit; /*115*/
+
+
+/************************FINAL ANALYSIS*************/
+title; /* Clear the titles */
+
+%Let num_clusters=3; /*EDIT to cluster number selected */
+
+/* ************************************* */
+/* ********** Subset Clusters ********** */
+/* ************************************* */
+/* Define the new subsets based on the number of clusters */
+data &specialty._C1 &specialty._C2 &specialty._C3; /*EDIT if additional clusters used */
+	set auths_per_mem_cluster_&specialty;
+
+	if cluster=1 then output &specialty._C1; /*93*/
+
+		if cluster=2 then output &specialty._C2; /*17*/
+
+			if cluster=3 then output &specialty._C3; /*5*/
+run;
+
+/* ******************************************** */
+/* ********** Descriptive Statistics ********** */
+/* ******************************************** */
+
+/*Review distribution of members seen, num auths, and rate auths per member	
+	for Full Panel of Providers*/
+proc univariate data=auths_per_mem_cluster_&specialty;
+	var Members_M Auths_M Auths_PM_M; /*The monitoring period*/
+	histogram / barlabel=count
+		endpoints
+		ODSTITLE=LABELFMT
+		VSCALE=COUNT;
+	label Members_M="Number of Patients";
+	label Auths_M="Number of Auths";
+	label Auths_PM_M="Auths/ Member";
+	title2 "Descriptive Statistics of All Providers";
+run;
+
+/*Review distribution of members seen, num auths, and rate auths per member	
+	for each Cluster, separately*/
+%macro cluster_desc;
+	%do i=1 %to &num_clusters;
+
+		proc univariate data=&specialty._C&i;
+			var Members_M Auths_M Auths_PM_M; /*The monitoring period*/
+			histogram / barlabel=count
+				endpoints
+				ODSTITLE=LABELFMT
+				VSCALE=COUNT;
+			label Members_M="Number of Patients";
+			label Auths_M="Number of Auths";
+			label Auths_PM_M="Auths / Member";
+			title2 "Descriptive Statistics of Cluster &i";
+		run;
+
+	%end;
+%mend cluster_desc;
+  
+%cluster_desc;
+
+title; /*Clear titles*/
+
+/* ************************************ */
+/* ************** t-Test ************** */
+/* ************************************ */
+
+/* Calculate the average before and after */
+data &specialty._bf_at;
+	set auths_per_mem_cluster_&specialty;
+	avg_before=mean(of Auths_PM_B1-Auths_PM_B4);
+	avg_after=mean(of Auths_PM_M);
+	keep avg_before avg_after;
+run;
+
+/* t-test */
+proc ttest DATA=&specialty._bf_at sides=U; /* upper one-sided */
+	paired avg_after*avg_before;
+run;
+
+/* **************************************** */
+/* ********* Flagging By Cluster ********** */
+/* **************************************** */
+
+/* ***** Level IQR flag (informational) ***** */
+%macro level_flag;
+	%do i=1 %to &num_clusters;
+
+		/* Get the IQR of average auths-per-member from cluster*/
+		proc means data=&specialty._C&i n qrange p25 p75;
+			var Auths_PM_M;
+			ods output summary=&specialty._C&i._AM_IQR;
+		run;
+
+		/* Create Level IQR flag */
+
+		/* Cluster IQR table is 1 row so we can join these results to each row of
+		provider level data simply with Cartesian product of the 2 tables*/
+		proc sql;
+			create table &specialty._C&i._level_flag as 
+				select a.provider_npi
+					, (b.Auths_PM_M_P75+1.5*b.Auths_PM_M_QRange) as Level_Cutoff
+					, 
+				case 
+					when (a.Auths_PM_M > b.Auths_PM_M_P75+1.5*b.Auths_PM_M_QRange)
+					then "Y" 
+				else "N" 
+				end 
+			as Level_Flag
+				from &specialty._C&i a, &specialty._C&i._AM_IQR b;
+		quit;
+
+	%end;
+%mend level_flag;
+  
+%level_flag;
+
+/* ***** SD Flag ***** */
+/* ***** (Within provider 2 Standard Deviation Flag) ***** */
+%macro sd_flag;
+	%do i=1 %to &num_clusters;
+
+		proc sql;
+			create table &specialty._C&i._SDFlag2 as 
+				select *, (Avg_Auths_PM_B + 2*avg(SD_Auths_PM_B)) as SD_Cutoff
+					from &specialty._C&i
+						where (Avg_Auths_PM_B > 0 or Auths_PM_M >0);
+		quit;
+
+		data &specialty._C&i._SDFlag;
+			set &specialty._C&i._SDFlag2;
+
+			if Auths_PM_M > sd_cutoff then
+				SD_Flag="Y";
+			else SD_Flag="N";
+		run;
+
+	%end;
+%mend sd_flag;
+  
+%sd_flag;
+
+
+/* ***** Change Flag ***** */
+/*baseline to monitoring period in 2 points*/
+%macro change_flag;
+	%do i=1 %to &num_clusters;
+
+		/*Calculate provider-level change in auths/mem from baseline avg to monitoring period*/
+		proc sql;
+			create table &specialty._C&i._pr_chg as
+				select provider_npi
+					, (Auths_PM_M / Avg_Auths_PM_B) - 1 as Provider_Change
+				from &specialty._C&i;
+		quit;
+
+		/* Get the IQR of provider-level auths/member change from cluster*/
+		proc means data=&specialty._C&i._pr_chg n qrange p25 p75;
+			var Provider_Change;
+			ods output summary=&specialty._C&i._pr_chg_IQR;
+		run;
+
+		/*Informational: Calculate cluster-level change btw avg auths/mem in baseline
+			and monitoring period*/
+		proc sql;
+			create table &specialty._C&i._cl_chg as
+				select sum(Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) 
+					/ sum(Members_B1 + Members_B2 + Members_B3 + Members_B4) as cl_avg_Auths_PM_B
+					, sum(Auths_M) / sum(Members_M) as cl_avg_Auths_PM_M
+					, ( ( sum(Auths_M) / sum(Members_M) ) 
+					/ ( sum(Auths_B1 + Auths_B2 + Auths_B3 + Auths_B4) / sum(Members_B1 + Members_B2 + Members_B3 + Members_B4) ) )
+					- 1 as Cluster_Change
+				from &specialty._C&i;
+		quit;
+
+		/* Create Change IQR flag */
+
+		/*Join single rows from IQR and cluster change tables to provider level table
+			with Cartesian product of the 3 tables*/
+		proc sql;
+			create table &specialty._C&i._change_flag as 
+				select a.provider_npi, Provider_Change /*from a*/
+
+			, cl_avg_Auths_PM_B, cl_avg_Auths_PM_M, Cluster_Change /*from c*/
+
+			, (b.Provider_Change_P75+1.5*b.Provider_Change_QRange) as Change_Cutoff
+			, 
+			case 
+				when (a.Provider_Change > b.Provider_Change_P75+1.5*b.Provider_Change_QRange) 
+					then "Y" 
+				else "N" 
+			end 
+			as Change_Flag
+				from &specialty._C&i._pr_chg a
+					, &specialty._C&i._pr_chg_IQR b
+					, &specialty._C&i._cl_chg c;
+		quit;
+
+	%end;
+%mend change_flag;
+  
+%change_flag;
+
+
+/* ***** Slope Flag ***** */
+%macro slope_flag;
+	%do i=1 %to &num_clusters;
+
+		/* Extract only columns of auths-per-member */
+		proc sql;
+			create table &specialty._C&i._AM as
+				select provider_npi
+					, Auths_PM_B1, Auths_PM_B2, Auths_PM_B3, Auths_PM_B4
+					, Auths_PM_M
+				from &specialty._C&i;
+		quit;
+
+		/* Transpose to calculate the auths-per-member slope for each provider */
+		PROC TRANSPOSE DATA=&specialty._C&i._AM
+			OUT=&specialty._C&i._AM_transpose
+			NAME=Source
+			LABEL=Label;
+			BY Provider_NPI;
+		run;
+
+		/* Assign a serial of numbers to calculate the slopes */
+		data &specialty._C&i._AM_transpose2;
+			set &specialty._C&i._AM_transpose;
+
+			if Source='Auths_PM_B1' then
+				slope_serial=1;
+
+			if Source='Auths_PM_B2' then
+				slope_serial=2;
+
+			if Source='Auths_PM_B3' then
+				slope_serial=3;
+
+			if Source='Auths_PM_B4' then
+				slope_serial=4;
+
+			if Source='Auths_PM_M' then
+				slope_serial=5;
+		run;
+
+		ods graphics off;
+
+		/* Within each provider: Regress auth/member rate (col1) on 6-mo bucket (slope_serial).
+		Coefficient on slope_serial (variable named slope below) shows how auth/member rate changed over time, on avg.
+		Request output statistics in parameter estimates (PE) and fit stats (FS) datasets */
+		proc reg data=&specialty._C&i._AM_transpose2;
+			by provider_npi notsorted;
+			model col1 = slope_serial;
+			ods output parameterEstimates=&specialty._C&i._PE FitStatistics=&specialty._C&i._FS;
+		run;
+
+		/* Join statistics into a table */
+		proc sql;
+			create table &specialty._C&i._stats as
+				select PE.provider_npi, PE.Estimate as slope, FS.cValue2 as Slope_R2
+					from &specialty._C&i._PE PE, &specialty._C&i._FS FS
+						where pe.provider_npi=fs.provider_npi and PE.Variable="slope_serial" and FS.Label2="R-Square";
+		quit;
+
+		/* Get the IQR of slopes across providers in cluster for flagging */
+		proc means data=&specialty._C&i._stats n qrange p25 p75;
+			var slope;
+			where slope > 0; /*evaluate providers compared to peers also rising in auths/member*/
+			ods output summary=&specialty._C&i._Slope_IQR;
+		run;
+
+		/* Create slope flags */
+		proc sql;
+			create table &specialty._C&i._slope_flag as 
+				select stats.*
+					, b.slope_P75+1.5*b.slope_QRange as Slope_Cutoff
+					, 
+				case 
+					when (stats.slope > b.slope_P75+1.5*b.slope_QRange) 
+					and input(stats.Slope_R2, 8.) >= 0.75 
+					then "Y" 
+				else "N" 
+				end 
+			as Slope_Flag
+				from &specialty._C&i._stats stats, &specialty._C&i._Slope_IQR b;
+		quit;
+
+		/* *** Merge Level, Change, and Slope flags with full provider-level dataframe*** */
+		proc sql;
+			create table &specialty._C&i._flags as
+				select z.*
+					, SD_Flag, Change_Flag, Slope_Flag, Level_Flag
+					, SD_cutoff /*from d*/
+
+			, Change_Cutoff, Cluster_Change, cl_avg_Auths_PM_B, cl_avg_Auths_PM_M, Provider_Change  /*from b*/
+			, Slope_Cutoff, Slope, Slope_R2 /*from c*/
+			, Level_Cutoff /*from a*/
+			from &specialty._C&i z
+				left join &specialty._C&i._level_flag a
+					on z.provider_npi = a.provider_npi
+				left join &specialty._C&i._change_flag b
+					on z.provider_npi = b.provider_npi
+				left join &specialty._C&i._slope_flag c
+					on z.provider_npi = c.provider_npi
+				left join &specialty._C&i._SDFlag d
+					on z.provider_npi = d.provider_npi;
+		quit;
+
+		/* unflagging */
+		data &specialty._C&i._unflag;
+			set &specialty._C&i._flags;
+
+			/* UNFLAG when less than (LT_previous) any one of the periods in the past TWO years */
+			if Auths_PM_M < Auths_PM_B1 
+				OR Auths_PM_M < Auths_PM_B2 
+				OR Auths_PM_M < Auths_PM_B3 
+				OR Auths_PM_M < Auths_PM_B4 then
+				LT_previous="Y";
+			else LT_previous="N";
+
+			/* Final Flag */
+			if (sd_flag="Y" OR change_flag="Y" OR Slope_flag="Y") and LT_previous="N" then
+				Final_Flag="Y";
+			else Final_Flag=.;
+
+			/* Number of auths to reduce to be unflagged by SD FLAG */
+			if SD_Flag="Y" and LT_previous="N" then
+				Auths_to_Unflag_SD = Auths_M - sd_cutoff*Members_M;
+			else Auths_to_Unflag_SD=.;
+
+			/* Number of auths to reduce to be unflagged by LEVEL */
+			if Level_Flag="Y" and LT_previous="N" then
+				Auths_to_Unflag_Level = Auths_M - Level_Cutoff*Members_M;
+			else Auths_to_Unflag_Level=.;
+
+			/* Number of auths to reduce to be unflagged by CHANGE */
+			if Change_Flag="Y" and LT_previous="N" then
+				Auths_to_Unflag_Change = Auths_M - (Change_Cutoff + 1) * Avg_Auths_PM_B * Members_M;
+			else Auths_to_Unflag_Change=.;
+		run;
+
+		/* Final table: merge the region back */
+		proc sql;
+			create table &specialty._C&i._final as
+				select distinct a.*, b.Region
+					from &specialty._C&i._unflag a
+						left join library.Providers_&prov_dwnld_date._&specialty b 
+							on a.provider_npi = b.provider_npi
+						order by a.provider_npi, b.Region; /*Manually combine the regions if more than one*/
+		quit;
+
+	%end;
+%mend slope_flag;
+  
+%slope_flag;
+ 
+
+%macro Needs_Review;
+	%do i=1 %to &num_clusters;
+
+		/*create table with the hypothetical most recent period's 
+		auths per member recalculated assuming they had 5 less auths*/
+		proc sql;
+			create table &specialty._C&i._AM_transpose2_5lessauths as
+				select t1.*
+					, 
+				case 
+					when t1.source ="Auths_PM_M" 
+					then (t2.Auths_M-5)/(t2.Members_M) 
+				else t1.COL1 
+				end 
+			as Auths_PM_M_Less5
+				from &specialty._C&i._AM_transpose2 t1 
+					left join &specialty._C&i. t2 on t1.provider_npi=t2.provider_npi
+						order by t1.provider_npi;
+		run;
+
+		/*create table with a new slope calculated assuming the provider hypothetically
+		had 5 less auths in the most recent period*/
+		proc sql;
+			create table &specialty._C&i._AM_Slope_Less5Auths as
+				select t1.provider_npi, sum((Auths_PM_M_Less5-ybar)*(slope_serial-xbar))/sum((slope_serial-xbar)*(slope_serial-xbar)) as Slope_Less5Auths
+					from (select t1.*
+						, (select avg(Auths_PM_M_Less5) from &specialty._C&i._AM_transpose2_5lessauths t2 where t1.provider_NPI=t2.provider_NPI) as  ybar
+						, (select avg(slope_serial) from &specialty._C&i._AM_transpose2_5lessauths t2 where t1.provider_NPI=t2.provider_NPI) as  xbar                             
+
+					from &specialty._C&i._AM_transpose2_5lessauths t1) t1 
+						group by t1.provider_npi
+							order by t1.provider_npi;
+		run;
+
+		/*add the folowing columns to the final table:
+		slope_cutoff
+		Slope_Less5Auths
+		Needs_Review
+		*/
+%macro append_slope_fields_to_tbl;
+	%if %sysfunc(exist(&specialty._C&i._Slope_IQR, data)) %then
+		%do;
+			/* Create slope flags */
+			proc sql;
+				create table &specialty._C&i._final as
+					select t1.*
+						, t2.slope_P75+1.5*t2.slope_QRange as slope_cutoff 
+						, 
+					case 
+						when t1.Slope_Flag = 'Y' then  t3.Slope_Less5Auths  
+					end 
+				as Slope_Less5Auths
+					, 
+				case 
+					when  Final_Flag="Y"
+					AND (Auths_to_Unflag_SD >= 5
+					OR Auths_to_Unflag_Change >= 5
+					OR (t1.Slope_Flag = 'Y' and t3.Slope_Less5Auths > (t2.slope_P75+1.5*t2.slope_QRange))
+					)
+					then "Y" 
+				end 
+			as Needs_Review
+				from &specialty._C&i._final t1 left join &specialty._C&i._Slope_IQR t2 on 1=1 
+					left join &specialty._C&i._AM_Slope_Less5Auths t3 on t1.provider_npi=t3.provider_npi
+						order by t1.provider_npi, t1.Region;
+			quit;
+
+		%end;
+	%else
+		%do;
+
+			proc sql;
+				create table &specialty._C&i._final as
+					select t1.*
+						,  .  as slope_cutoff 
+						,  .  as Slope_Less5Auths
+						,  
+					case 
+						when  (Auths_to_Unflag_SD >= 5
+						OR Auths_to_Unflag_Change >= 5 )
+						then "Y" 
+					end 
+				as Needs_Review 
+					from &specialty._C&i._final t1 
+						left join &specialty._C&i._AM_Slope_Less5Auths t3 on t1.provider_npi=t3.provider_npi
+							order by t1.provider_npi, t1.Region;
+			run;
+
+		%end;
+%mend append_slope_fields_to_tbl;
+
+%append_slope_fields_to_tbl;
+%end;
+%mend Needs_Review;
+  
+%Needs_Review;
+
