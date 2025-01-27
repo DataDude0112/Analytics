@@ -102,3 +102,8 @@ proc logistic data=clean_m2 desc;
 	model SNFStaysWithReadmits = Sex Age retrorisk companyxHealth SNFAdmitsFromIP 
 		year_2023 year_2024 q1 q2 q3 q4 internalfacilitysk;
 run;
+
+
+
+
+
