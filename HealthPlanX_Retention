@@ -1,0 +1,231 @@
+import pandas as pd 
+from openpyxl import load_workbook
+import pyodbc
+
+
+
+#Setting up variables to be utilized in later steps
+
+start_y = pd.Timestamp.now().strftime('%Y')
+start_report = start_y + '01' + '08'
+current_ym = pd.Timestamp.now().strftime('%Y%m') #Current
+current_report = current_ym + '08'
+cutoff_date = pd.to_datetime(start_y +'-01-01')
+#print(current_report)
+
+
+
+#Pulling in raw January roster
+
+january = pd.read_excel("G:\\Outgoing Data\\ACO\\HealthPlanXPPO_providerAddsAndDeletes\\sent\\hpmg_update_"+start_report+".xlsx",sheet_name='CMARoster')
+
+january.rename(columns={'Fed Tax ID':'TIN'}, inplace=True)
+
+january['NPI']=january['NPI'].astype(str)
+january['TIN']=january['TIN'].astype(str)
+
+january['TIN'] = january['TIN'].apply(lambda TIN: TIN.zfill(9) if len(TIN) == 7 else TIN)
+january['TIN'] = january['TIN'].apply(lambda TIN: TIN.zfill(9) if len(TIN) == 8 else TIN)
+
+january['NPI_TIN'] = january['NPI'] + january['TIN']
+
+dataorder = ['NPI_TIN','NPI','TIN','First Name','Last Name']
+january = january[dataorder]
+
+Raw_Jan_Roster=january.sort_values(by=['Last Name','NPI'])
+
+#print(January_Roster) #2,429 rows
+#print(january.dtypes)
+
+
+
+#Pulling in full ACO overlaps list
+
+overlaps = pd.read_csv("S:\\Clinical Analysis\\Employee Folders\\Daniel Padilla\\HealthPlanX Retention\\2024\\HealthPlanX Full Overlaps.csv")
+
+overlaps.rename(columns={'Fed Tax ID':'TIN', 'NPI&TIN':'NPI_TIN'}, inplace=True)
+
+overlaps['NPI']=overlaps['NPI'].astype(str)
+overlaps['TIN']=overlaps['TIN'].astype(str)
+overlaps['NPI_TIN']=overlaps['NPI_TIN'].astype(str)
+
+overlaps['TIN'] = overlaps['TIN'].apply(lambda TIN: TIN.zfill(9) if len(TIN) == 7 else TIN)
+overlaps['TIN'] = overlaps['TIN'].apply(lambda TIN: TIN.zfill(9) if len(TIN) == 8 else TIN)
+
+overlaps = overlaps[overlaps['Status'] != 'Closed - Staying with Hill']
+
+dataorder = ['NPI_TIN','NPI','TIN','First Name','Last Name','Status']
+overlaps = overlaps[dataorder]
+
+Overlaps_Roster=overlaps.sort_values(by=['Last Name','NPI'])
+
+#print(Overlaps_Roster) #163 rows
+#print(Overlaps_Roster.dtypes)
+
+
+
+#Cleaning raw January roster with full ACO overlaps list and creating a clean January roster list
+
+merged = Raw_Jan_Roster.merge(Overlaps_Roster, on=['NPI_TIN'],how='left',indicator=False)
+
+results = merged[merged['NPI_y'].isna()]
+
+CleanJanuary = results.drop_duplicates(subset='NPI_TIN')
+
+January_Roster = CleanJanuary.drop(['NPI_y', 'TIN_y','First Name_y','Last Name_y','Status'], axis=1)
+
+January_Roster.rename(columns={'NPI_x':'NPI','TIN_x':'TIN','First Name_x':'First Name','Last Name_x':'Last Name'}, inplace=True)
+
+#print(January_Roster)
+
+
+
+#Pulling in most recent roster
+
+current = pd.read_excel("G:\\Outgoing Data\\ACO\\HealthPlanXPPO_providerAddsAndDeletes\\sent\\hpmg_update_"+current_report+".xlsx",sheet_name='CMARoster')
+
+current.rename(columns={'Fed Tax ID':'TIN'}, inplace=True)
+
+current['NPI']=current['NPI'].astype(str)
+current['TIN']=current['TIN'].astype(str)
+
+current['TIN'] = current['TIN'].apply(lambda TIN: TIN.zfill(9) if len(TIN) == 7 else TIN)
+current['TIN'] = current['TIN'].apply(lambda TIN: TIN.zfill(9) if len(TIN) == 8 else TIN)
+
+current['NPI_TIN'] = current['NPI'] + current['TIN']
+
+dataorder_current = ['NPI_TIN', 'NPI','TIN','First Name','Last Name']
+current = current[dataorder_current]
+
+Current_Roster = current.sort_values(by=['Last Name','NPI'])
+
+#print(current) #2,424 rows
+#print(current.dtypes)
+
+
+
+#Creating termed provider list
+
+Termed = January_Roster[~January_Roster['NPI'].isin(Current_Roster['NPI'])]
+Termed = Termed.sort_values(by=['Last Name'])
+Termed.rename(columns={'TIN_x':'TIN','First Name_x':'First Name','Last Name_x':'Last Name'}, inplace=True)
+#print(Termed) #169 rows
+
+
+
+#Connecting to SQL Server DB to pull in necessary SPOT data. Running a stored procedure I created that runs Deanna's SPOT pull
+
+cnxn_str = ("Driver={SQL Server};"
+             "Server=serverx;"
+             "Database=db_reporting;"
+             "Trusted_Connection=yes;")
+
+conn = pyodbc.connect(cnxn_str)
+
+cursor = conn.cursor()
+
+query = "execute [dbo].[DRP_HealthPlanX_SPOT]"
+
+Spot = pd.read_sql_query(query, conn)
+
+conn.close()
+
+#print(Spot)
+#print(Spot.dtypes)
+#print(pyodbc.drivers())
+
+
+
+#Creating a final table that contains termed providers and all their data necessary for report
+
+Termed_Providers = Termed.merge(Spot, on=['NPI_TIN'],how='left',indicator=False)
+
+dataorder_Termed_Providers = ['NPI_TIN', 'NPI_x','TIN_x','First Name','Last Name','DOB','Term_Date']
+Termed_Providers = Termed_Providers[dataorder_Termed_Providers]
+
+Termed_Providers['Term_Date'] = pd.to_datetime(Termed_Providers['Term_Date'],errors='coerce')
+Termed_Providers['DOB'] = pd.to_datetime(Termed_Providers['DOB'],errors='coerce')
+
+Termed_Providers.rename(columns={'NPI_x':'NPI', 'TIN_x':'TIN', 'Term_Date':'Term Date'}, inplace=True)
+
+Termed_Providers['Termed in Loan Period'] = Termed_Providers.groupby('NPI')['Term Date'].transform(lambda x: (x >= cutoff_date).any())
+Termed_Providers['Termed in Loan Period'] = Termed_Providers.apply(lambda row: row['NPI'] if row['Termed in Loan Period'] else None, axis = 1)
+
+current_date = pd.Timestamp.now()
+Termed_Providers['Age'] = current_date.year - Termed_Providers['DOB'].dt.year
+Termed_Providers['Retirement Age'] = Termed_Providers['NPI'].where((Termed_Providers['Age'] >= 65) & (Termed_Providers['Termed in Loan Period'].notnull()),pd.NA)
+
+Termed_Providers['Future Term Date Error'] = Termed_Providers['Term Date'].apply(lambda x: 1 if pd.notnull(x) and x > current_date else 0)
+
+#print(dataorder_Termed_Providers.dtypes)
+
+
+
+
+#Creating a final table that contains termed providers and all their data necessary for report
+
+Termed_Providers = Termed.merge(Spot, on=['NPI_TIN'],how='left',indicator=False)
+
+dataorder_Termed_Providers = ['NPI_TIN', 'NPI_x','TIN_x','First Name','Last Name','DOB','Term_Date']
+Termed_Providers = Termed_Providers[dataorder_Termed_Providers]
+
+Termed_Providers['Term_Date'] = pd.to_datetime(Termed_Providers['Term_Date'],errors='coerce')
+Termed_Providers['DOB'] = pd.to_datetime(Termed_Providers['DOB'],errors='coerce')
+
+Termed_Providers.rename(columns={'NPI_x':'NPI', 'TIN_x':'TIN', 'Term_Date':'Term Date'}, inplace=True)
+
+Termed_Providers['Termed in Loan Period'] = Termed_Providers.groupby('NPI')['Term Date'].transform(lambda x: (x >= cutoff_date).any())
+Termed_Providers['Termed in Loan Period'] = Termed_Providers.apply(lambda row: row['NPI'] if row['Termed in Loan Period'] else None, axis = 1)
+
+current_date = pd.Timestamp.now()
+Termed_Providers['Age'] = current_date.year - Termed_Providers['DOB'].dt.year
+Termed_Providers['Retirement Age'] = Termed_Providers['NPI'].where((Termed_Providers['Age'] >= 65) & (Termed_Providers['Termed in Loan Period'].notnull()),pd.NA)
+
+Termed_Providers['Future Term Date Error'] = Termed_Providers['Term Date'].apply(lambda x: 1 if pd.notnull(x) and x > current_date else 0)
+
+#print(dataorder_Termed_Providers.dtypes)
+
+
+
+intro = ["HealthPlanX Provider Retention Roster",
+"",
+"Definitions:",
+"Active provider count = providers with a CMA contract in the HealthPlanX network who have a contract start date on or prior to 1-1-" + start_y + " and are still active on 1-1-" + start_y,
+"Termed provider count = providers who have termed to date between 1-1-" + start_y + " to 12-31-" + start_y + " (start and end dates inclusive)",
+"Retention rate = (start distinct count - termed distinct count) / (start distinct count)",
+"",
+"Distinct count of active providers on 1-1-" + start_y + " = ",                                                                            
+"Distinct count of active providers on 1-1-" + start_y + " (minus full ACO overlaps)" + " = ",
+"Distinct count of termed providers =",
+"Distinct count of back date termed providers =",
+"Distinct count of active providers on 1-1-" + start_y + " (minus full ACO overlaps & back date terms) =",
+"Distinct count of termed providers during loan period =",        
+"Distinct count of providers who have termed in retirement age (backdates excluded) =",
+"Percentage of termed providers who are of retirment age =",
+"Distinct count of current active providers =",
+"Current Retention rate =",
+"Current Buffer =",
+"Distinct count of full ACO overlap providers ="]
+
+#Creating a final table that contains termed providers and all their data necessary for report
+
+Termed_Providers = Termed.merge(Spot, on=['NPI_TIN'],how='left',indicator=False)
+
+dataorder_Termed_Providers = ['NPI_TIN', 'NPI_x','TIN_x','First Name','Last Name','DOB','Term_Date']
+Termed_Providers = Termed_Providers[dataorder_Termed_Providers]
+
+Termed_Providers['Term_Date'] = pd.to_datetime(Termed_Providers['Term_Date'],errors='coerce')
+Termed_Providers['DOB'] = pd.to_datetime(Termed_Providers['DOB'],errors='coerce')
+
+Termed_Providers.rename(columns={'NPI_x':'NPI', 'TIN_x':'TIN', 'Term_Date':'Term Date'}, inplace=True)
+
+Termed_Providers['Termed in Loan Period'] = Termed_Providers.groupby('NPI')['Term Date'].transform(lambda x: (x >= cutoff_date).any())
+Termed_Providers['Termed in Loan Period'] = Termed_Providers.apply(lambda row: row['NPI'] if row['Termed in Loan Period'] else None, axis = 1)
+
+current_date = pd.Timestamp.now()
+Termed_Providers['Age'] = current_date.year - Termed_Providers['DOB'].dt.year
+Termed_Providers['Retirement Age'] = Termed_Providers['NPI'].where((Termed_Providers['Age'] >= 65) & (Termed_Providers['Termed in Loan Period'].notnull()),pd.NA)
+
+Termed_Providers['Future Term Date Error'] = Termed_Providers['Term Date'].apply(lambda x: 1 if pd.notnull(x) and x > current_date else 0)
+
+#print(dataorder_Termed_Providers.dtypes)
