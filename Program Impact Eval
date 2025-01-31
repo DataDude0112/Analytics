@@ -1,3 +1,5 @@
+--This is an program impact evaluation utilizing multi linear and logistic regression models to control for confounding variables.
+--This code is executed in SAS
 
 ods graphics on;
 proc logistic data=t1_m desc plots=(all);
