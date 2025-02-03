@@ -1,0 +1,4 @@
+Paired ttest: This test compares the means of two related groups (e.g., blood pressure readings before and after using the monitor) to determine if there is a statistically significant difference between them.
+Repeated measures ANOVA: This method is used when you have multiple measurements over time. It helps to determine if there are any statistically significant differences in blood pressure readings across different time points.
+Cohen's d: This is a measure of effect size that indicates the standardized difference between two means. It helps to understand the magnitude of the effect of the blood pressure monitor.
+Multiple imputation is a statistical technique used to handle missing data in a dataset. Instead of simply filling in missing values with a single estimate (like the mean), multiple imputation creates several different plausible datasets by imputing the missing values multiple times. 
