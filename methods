@@ -1,3 +1,8 @@
+Outliers
+IQR. Better for non-normally distributed data. Q1 - (1.5 x IQR). Q3 + (1.5 x IQR).
+Z score. Assumes normality. 95% CI.
+
+
 Paired ttest: This test compares the means of two related groups (e.g., blood pressure readings before and after using the monitor) to determine if there is a statistically significant difference between them.
 Repeated measures ANOVA: This method is used when you have multiple measurements over time. It helps to determine if there are any statistically significant differences in blood pressure readings across different time points.
 Cohen's d: This is a measure of effect size that indicates the standardized difference between two means. It helps to understand the magnitude of the effect of the blood pressure monitor.
