@@ -1,0 +1,26 @@
+import pandas as pd 
+from openpyxl import load_workbook
+import numpy as np
+
+# Sample dta
+dta = pd.read_excel(r"C:\\Users\\DRP\\Daniel Padilla\\test_dta.xlsx")
+dta[['Height(Inches)','Weight(Pounds)']] = dta[['Height(Inches)','Weight(Pounds)']].astype(int)
+#print(dta)
+#print(dta.dtypes)
+
+# Calculate mean and standard deviation
+mean = np.mean(dta['Height(Inches)'])
+std_dev = np.std(dta['Height(Inches)'])
+
+#print(mean)
+#print(std_dev)
+
+# Calculate Z-scores
+dta['Z-Score'] = (dta['Height(Inches)'] - mean) / std_dev
+
+# Flag outliers: Z-score > 2 or Z-score < -2
+dta['Outlier'] = dta['Z-Score'].apply(lambda x: abs(x) > 2)
+
+# Export to Excel
+dta.to_excel(r"C:\\Users\\DRP\\Daniel Padilla\\outliers.xlsx", index=False)
+print(dta)
