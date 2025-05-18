@@ -13,7 +13,7 @@ cutoff_date = pd.to_datetime(start_y +'-01-01')
 
 #Pulling in raw January roster
 
-january = pd.read_excel("G:\\Outgoing Data\\ACO\\HPPPO_providerAddsAndDeletes\\sent\\hpmg_update_"+start_report+".xlsx",sheet_name='CMARoster')
+january = pd.read_excel("G:\\Outgoing Data\\ACO\\HPPPO_providerAddsAndDeletes\\sent\\our_company_update_"+start_report+".xlsx",sheet_name='CMARoster')
 
 january.rename(columns={'Fed Tax ID':'TIN'}, inplace=True)
 
