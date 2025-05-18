@@ -1,0 +1,45 @@
+#!pip install tableone
+import pandas as pd
+from tableone import TableOne
+import statsmodels.api as sm
+import numpy as np
+import pyodbc
+
+cnxn_str = ("Driver={SQL Server};"
+             "Server=Informatics;"
+             "Database=Informatics;"
+             "Trusted_Connection=yes;")
+
+conn = pyodbc.connect(cnxn_str)
+
+cursor = conn.cursor()
+
+query = "select * from dbo.vw_DRP_company_1"
+
+company_tp1 = pd.read_sql_query(query, conn)
+
+conn.close()
+
+columns = ['retrorisk','companyHealth','Canopy','BusinessGroup1','Region','LOB','HP','Age','Sex','Event_Year','Event_Qtr','CMCaseFlag','SNFerrorscore','internalerrorscore','internalchainflag','SNFStaysWithoutSkilledVisits','SNFStaysWithDelayedSkilledVisits','SNFStaysWithSkilledVisits','SNFStaysWithERVisits','SNFStaysWithReadmits','SNFAdmitsFromCommunity','SNFAdmitsFromED','SNFAdmitsFromIP','lengthofstay','aidcategorysk']
+categorical = ['Canopy','BusinessGroup1','Region','LOB','HP','Sex','Event_Year','Event_Qtr','CMCaseFlag','SNFerrorscore','internalerrorscore','internalchainflag','SNFStaysWithoutSkilledVisits','SNFStaysWithDelayedSkilledVisits','SNFStaysWithSkilledVisits','SNFStaysWithERVisits','SNFStaysWithReadmits','SNFAdmitsFromCommunity','SNFAdmitsFromED','SNFAdmitsFromIP','aidcategorysk']
+groupby = 'companyHealth'
+table1 = TableOne(company_tp1, columns=columns, categorical=categorical, groupby=groupby, pval=True)
+#print(table1)
+table1.to_excel(r"S:Employee Folders\Daniel Padilla\companyHealth\2024\companyHealth_Table1_tp1.xlsx",sheet_name='Intro')
+
+company_tp1 = company[company['LOB'] == 'Medicare']
+
+x= company_Medicare[['Sex', 'Age', 'retrorisk', 'companyHealth', 'SNFAdmitsFromIP', 'SNFAdmitsFromED','CMCaseFlag']]
+y= company_Medicare['SNFStaysWithReadmits']
+
+x =sm.add_constant(x)
+
+model = sm.Logit(y, x)
+result = model.fit()
+
+#print(result.summary())
+
+odds_ratios = pd.DataFrame({
+    'OR': result.params.apply(lambda x: np.exp(x))})
+
+#print(odds_ratios)
