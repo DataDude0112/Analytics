@@ -1,0 +1,227 @@
+--Developed: 05122025
+--Created by: Daniel Padilla
+--Server: Server123
+--DB: AV
+
+--HI
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+drop table if exists #test
+select distinct pat_uid
+into #test
+from [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024]
+where 1=1
+and loadperiod = '202510'
+and left (ERG_RISK_MARKER,6) = '164700'
+
+
+drop table if exists infor.dbo.drp_topconditions_pts
+; with cte as (
+select distinct row_number () over (partition by pat_uid order by pat_uid) rn
+, pat_uid
+, datediff(YYYY,[Patient DOB],getdate()) as Age
+, [Patient Gender]
+, case when count (*) over (partition by pat_uid) > 1 then 'Dual' else lineofbusinessname end as 'LOB'
+, HealthPlanName
+, case when SubProductCode = 'LKK' then 'RKK' else 'Non-RKK' end as RKK
+, case when (AidCategoryCode = 'DSNP' and [Incurred YearMonth] >= '202401' or (AidCategoryCode = 'SNP' and [Incurred YearMonth] < '202401' and HealthPlanShortCode not in ('BD'))) then 'DSNP' else 'Non-DSNP' end as DSNP 
+	from [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s
+		left join elig e
+		on s.pat_uid = e.MasterPatientID
+where 1=1
+and loadperiod = '202510'
+and left (ERG_RISK_MARKER,6) = '164700'			--Hyperlipidimia  --EDIT
+and [Incurred YearMonth] = '202504'
+and [FlagWithDescrption] in ('Both Eligibility And CAP','Eligible But Not CAP')
+and HealthPlanName not in ('MEDICARE COB PAYER','COMMERCIAL COB PAYER')
+and ActiveMemberFlag = 1)
+select PAT_UID
+, Age
+, [Patient Gender]
+, LOB
+, HealthPlanName
+, RKK
+, DSNP
+into infor.dbo.drp_topconditions_pts
+from cte
+where rn = 1
+order by pat_uid
+
+
+drop table if exists infor.dbo.drp_topconditions_conditions
+; with deschist as (
+select distinct ERG, ERGArrayDescription, pat_uid
+from 
+	(select distinct pat_uid, ERG_RISK_MARKER as ERG, ERGArrayDescription, row_number () over (partition by ERG_RISK_MARKER order by ERGArrayDescription desc) rn 
+		from [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s2) as erg
+where rn = 1)
+select p.PAT_UID
+, s.ERG_RISK_MARKER as ERG
+, cond_cnt.cond_count
+, d.ERGArrayDescription Condition
+, l.*
+into infor.dbo.drp_topconditions_conditions
+	from infor.dbo.drp_topconditions_pts p
+		left join [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s
+		on p.PAT_UID = s.PAT_UID
+			left join (select p.pat_uid, count (distinct s.ERG_RISK_MARKER) as cond_count 
+			from infor.dbo.drp_topconditions_pts p 
+			left join [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s on p.PAT_UID = s.PAT_UID where loadperiod = '202510' group by p.pat_uid) cond_cnt
+			on p.pat_uid = cond_cnt.pat_uid
+				left join deschist d
+				on s.erg_risk_marker = d.ERG
+					left join LOHDetails l
+					on p.pat_uid = l.MasterPatientID
+where 1=1
+and loadperiod = '202510'
+order by p.PAT_UID
+
+
+drop table if exists infor.dbo.drp_topconditions_clms
+select distinct p.PAT_UID
+, cl.[ER Visit]
+, cl.[Claim Number]
+, cl.[Date of Service Date]
+, cl.[Procedure Code Short Description]
+, cl.Diag1
+, cl.DX1_ShortDesc
+, cl.Diag2
+, cl.DX2_ShortDesc
+, [Servicing Provider Proper Name]
+, er_cnt.er_cnt
+, case when [POS Code] in ('11','20','49','50','02','10','2') and [Servicing Provider Division Code] in ('PEDS','ADLT') then 'Yes' else 'No' end as PCP_Visit
+into infor.dbo.drp_topconditions_clms
+	from infor.dbo.drp_topconditions_pts p
+		left join clms cl
+		on p.pat_uid = cl.MasterPatientID
+			left join (select p.pat_uid, sum ([er visit]) as ER_CNT from infor.dbo.drp_topconditions_pts p left join clms cl on p.PAT_UID = cl.MasterPatientID 
+			where [Date of Service Date] between '2024-03-01' and '2025-02-28'
+			and [Claim Adj Type Description] in ('original','replacement')
+			and [Clm Status Type] in ('rejected','approved')
+			and [Clm Status Code] not in ('VOID')
+			and ([Approved Amount]>0 or [Deductible Amount] >0)
+			and [ER Visit] = 1 group by p.pat_uid) er_cnt
+			on p.PAT_UID = er_cnt.PAT_UID
+	where [Date of Service Date] between '2024-03-01' and '2025-02-28'
+	and [Claim Adj Type Description] in ('original','replacement')
+	and [Clm Status Type] in ('rejected','approved')
+	and [Clm Status Code] not in ('VOID')
+	and ([Approved Amount]>0 or [Deductible Amount] >0)
+	and ([ER Visit] = 1 or [POS Code] in ('11','20','49','50','02','10','2') and [Servicing Provider Division Code] in ('PEDS','ADLT'))
+order by er_cnt.er_cnt desc
+
+
+drop table if exists infor.dbo.drp_topconditions_symclms
+select s.PAT_UID, AmountAllowed, ProcedureCode, [Procedure Code Short Description], DiagCode1, DX1_ShortDesc FirstDtService, UniqueRecordID, PlaceOfService, claim, ETGNumber 
+into infor.dbo.drp_topconditions_symclms
+from infor.dbo.drp_topconditions_pts p
+left join [SYMMETRY_EIGHT].[dbo].SymmetryOur_CompanyClaims_2024 s
+on p.pat_uid = s.pat_uid
+join clms c
+on s.Claim = c.[Claim Number]
+and LoadPeriod = '202510'
+and RecordType in ('M', 'S')
+and EpisodeType = 0
+and OutlierStatus = 0	
+and left (ETGNumber,6) = '164700'																		--EDIT ETG
+
+
+drop table if exists infor.dbo.drp_topconditions_ip
+select distinct
+p.PAT_UID,
+a.[IP Admits],
+a.[SNF Admits],
+a.ObservationFlag,
+a.AuthNumber,
+a.AdmitDate,
+a.DischargeDate,
+a.DX1_Desc,
+a.DX2_Desc,
+ip_totals.Total_IP_Admits
+into infor.dbo.drp_topconditions_ip
+from infor.dbo.drp_topconditions_pts p
+	left join auths a on p.PAT_UID = a.MasterPatientID
+		left join (select distinct PAT_UID, sum([IP Admits]) as Total_IP_Admits
+   		from infor.dbo.drp_topconditions_pts p
+		left join auths a on p.PAT_UID = a.MasterPatientID
+   		where [IP Admits] = 1 and AdmitDate between '2024-03-01' and '2025-02-28'
+   		group by PAT_UID) ip_totals 
+		on p.PAT_UID = ip_totals.PAT_UID
+	where (a.[IP Admits] = 1 or ObservationFlag = 1 or [SNF Admits] = 1)
+	and AdmitDate between '2024-03-01' and '2025-02-28'
+order by ip_totals.Total_IP_Admits desc
+
+
+drop table if exists infor.dbo.drp_topconditions_sdoh
+;with cte as (
+select row_number () over (partition by pat_uid order by date_entered desc) rownum, p.PAT_UID, h.*
+	from infor.dbo.drp_topconditions_pts p
+		left join infor.dbo.hpi_member h
+		on p.pat_uid = h.masterpatientid
+)
+select *
+into infor.dbo.drp_topconditions_sdoh
+from cte
+where rownum = 1
+order by PAT_UID
+
+
+drop table if exists infor.dbo.drp_topconditions_cm
+;with cte as (
+select row_number () over (partition by EnterpriseID order by cast(EncounterEntryDateTime as date) desc ,case when [EN_Reason for Visit] in ('Member Contact','Initial Member Contact') then 'Yes' else 'No' end desc) rn
+, EnterpriseID Patient
+, cast(EncounterEntryDateTime as date) 'Most Recent CM Encounter Entry Date'
+, cast(EncounterCloseDateTime as date) 'Most Recent CM Encounter Close Date'
+, case when [EN_Reason for Visit] in ('Member Contact','Initial Member Contact') then 'Yes' else 'No' end as 'Member Reached'
+, EpisodeID 'CM Episode ID'
+, EpisodeClassification 'CM Episode Class.'
+, EpisodeUserName
+, EncounterID
+, ProgramStatus
+	from infor.dbo.drp_topconditions_pts p
+		left join [dwsqlp1prod].EPIC_Reporting.dbo.EncountersCompleteInfo cm
+		on p.pat_uid = cm.enterpriseid
+where 1=1
+and EnterpriseID is not null	
+and EpisodeClassification in ('HP High-Risk Care Management', 'HP Transitional Care Management', 'CM - Welcome Home')
+)
+select *
+into infor.dbo.drp_topconditions_cm
+from cte 
+where rn = 1
+
+
+select p.*
+, c.*
+, cl.[er visit]
+, cl.[Claim Number]
+, cl.[Date of Service Date]
+, cl.[Procedure Code Short Description]
+, cl.DX1_ShortDesc
+, cl.DX2_ShortDesc
+, cl.[Servicing Provider Proper Name]
+, cl.ER_CNT
+, cl.PCP_Visit
+, i.AdmitDate
+, i.DischargeDate
+, i.AuthNumber
+, i.[IP Admits]
+, i.ObservationFlag
+, i.[SNF Admits]
+, i.DX1_Desc
+, i.DX2_Desc
+, i.Total_IP_Admits
+, cm.*
+from infor.dbo.drp_topconditions_pts p
+left join infor.dbo.drp_topconditions_conditions c
+on p.PAT_UID = c.PAT_UID
+left join infor.dbo.drp_topconditions_clms cl
+on p.PAT_UID = cl.PAT_UID
+left join infor.dbo.drp_topconditions_ip i
+on p.PAT_UID = i.PAT_UID
+left join infor.dbo.drp_topconditions_cm cm
+on p.PAT_UID = cm.Patient
+where 1=1
+order by p.PAT_UID, cl.[Date of Service Date]
+
