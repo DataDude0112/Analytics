@@ -1,1 +1,23 @@
+# Calculate Q1 (25th percentile) and Q3 (75th percentile)
+Q1 = np.percentile(dta['Height(Inches)'], 25)
+Q3 = np.percentile(dta['Height(Inches)'], 75)
+
+# Calculate IQR (Interquartile Range)
+IQR = Q3 - Q1
+
+# Define lower and upper bounds for outliers
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+
+# Identify outliers
+outliers = dta[(dta['Height(Inches)'] < lower_bound) | (dta['Height(Inches)'] > upper_bound)]
+
+# Print results
+print("Lower Bound:", lower_bound)
+print("Upper Bound:", upper_bound)
+print("Number of Outliers:", len(outliers))
+print("Outliers:\n", outliers)
+
+
+
 
