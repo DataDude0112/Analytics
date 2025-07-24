@@ -1,0 +1,82 @@
+import pandas as pd
+import statsmodels.api as sm
+import numpy as np
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pyodbc
+from tableone import TableOne
+
+#import data from sql server
+cnxn_str = ("DRIVER={ODBC Driver 17 for SQL Server};"
+             "Server=informaticsserver;"
+             "Database=informatics;"
+             "Trusted_Connection=yes;")
+conn = pyodbc.connect(cnxn_str)
+cursor = conn.cursor()
+query = "select * from informatics.dbo.drp_readmissions_model"
+df = pd.read_sql_query(query, conn)
+conn.close()
+
+#view data
+print(df.head())
+print(df.info())
+
+#table one
+columns = ['RKK','PCP_Within_Seven_Days_DC','PCP_Spec_Within_Seven_Days_DC','ageband','Has ReadmitFlag1-30','LOBName','patientgender','Length of Stay','admitquarter','MemberRegionName','HPI_Pctile','Facility','RiskScore','Economic_Pctile']
+categorical = ['RKK','PCP_Within_Seven_Days_DC','PCP_Spec_Within_Seven_Days_DC','ageband','LOBName','patientgender','Length of Stay','MemberRegionName','Facility']
+groupby = 'Has ReadmitFlag1-30'
+table1 = TableOne(df, columns=columns, categorical=categorical, groupby=groupby, pval=True)
+print(table1)
+table1.to_excel(r"C:\Users\Daniel Padilla\Daniel Padilla - One Drive\Readmissions and Office Visit Report\Readmissions_and_office_visit_table1.xlsx",sheet_name='Intro')
+
+#selecting features
+selected_features = ['RKK','PCP_Within_Seven_Days_DC','ageband','Has ReadmitFlag1-30','LOBName','patientgender','Length of Stay','admitquarter','MemberRegionName','RiskScore','HPI_Pctile']
+df_selected = df[selected_features]
+print(df_selected.head())
+print(df_selected.info())
+
+#creating dummies
+df_encoded = pd.get_dummies(df_selected, drop_first=True, dtype=int)
+
+#creating x and y features
+y = df_encoded['Has ReadmitFlag1-30']
+X = df_encoded.drop('Has ReadmitFlag1-30', axis=1)
+
+#checking data types
+print(df_encoded.dtypes)
+
+#checking multicollinearity
+vif_data = pd.DataFrame()
+vif_data["feature"] = X.columns
+vif_data["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+
+print(vif_data)
+
+# Compute correlation matrix
+corr_matrix = df_encoded.corr()
+
+# Plot heatmap
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+plt.title("Correlation Matrix")
+plt.show()
+
+#Log Reg
+X_const = sm.add_constant(X)
+
+model = sm.Logit(y, X_const)
+result = model.fit()
+
+print(result.summary())
+
+# Odds ratios
+odds_ratios = np.exp(result.params)
+
+# Confidence intervals
+conf = np.exp(result.conf_int())
+conf.columns = ['2.5%', '97.5%']
+
+# Combine into one table
+summary_table = pd.concat([odds_ratios, conf], axis=1)
+summary_table.columns = ['Odds Ratio', 'CI Lower', 'CI Upper']
+print(summary_table)                  
