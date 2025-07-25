@@ -5,7 +5,7 @@ import urllib.parse
 
 #define the connection string
 odbc_str = ("DRIVER={ODBC Driver 17 for SQL Server};"
-             "Server=prd-CLARITY.epichosted.com;"
+             "Server=Clarity;"
              "Database=CLAR;"
              "Trusted_Connection=yes;")
 
