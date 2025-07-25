@@ -13,7 +13,7 @@ cutoff_date = pd.to_datetime(start_y +'-01-01')
 
 #Pulling in raw January roster
 
-january = pd.read_excel("G:\\Outgoing Data\\ACO\\HPPPO_providerAddsAndDeletes\\sent\\our_company_update_"+start_report+".xlsx",sheet_name='CMARoster')
+january = pd.read_excel("G:\\sent\\our_company_update_"+start_report+".xlsx",sheet_name='CMARoster')
 
 january.rename(columns={'Fed Tax ID':'TIN'}, inplace=True)
 
@@ -35,7 +35,7 @@ Raw_Jan_Roster=january.sort_values(by=['Last Name','NPI'])
 
 #Pulling in full ACO overlaps list
 
-overlaps = pd.read_csv("S:\\Clinical Analysis\\Employee Folders\\Daniel Padilla\\HP Retention\\2024\\HP Full Overlaps.csv")
+overlaps = pd.read_csv("\\Employee Folders\\Daniel Padilla\\HP Retention\\2024\\HP Full Overlaps.csv")
 
 overlaps.rename(columns={'Fed Tax ID':'TIN', 'NPI&TIN':'NPI_TIN'}, inplace=True)
 
@@ -95,8 +95,8 @@ Termed.rename(columns={'TIN_x':'TIN','First Name_x':'First Name','Last Name_x':'
 #Connecting to SQL Server DB to pull in necessary SPOT data. Running a stored procedure I created that runs Deanna's SPOT pull
 
 cnxn_str = ("Driver={SQL Server};"
-             "Server=CDATA-SQL1-PRD1;"
-             "Database=CRM_Reporting;"
+             "Server=ServerName;"
+             "Database=DBName;"
              "Trusted_Connection=yes;")
 
 conn = pyodbc.connect(cnxn_str)
