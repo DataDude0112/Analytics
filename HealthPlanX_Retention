@@ -19,7 +19,7 @@ cutoff_date = pd.to_datetime(start_y +'-01-01')
 
 #Pulling in raw January roster
 
-january = pd.read_excel("G:\\Outgoing Data\\ACO\\HealthPlanXPPO_providerAddsAndDeletes\\sent\\hpmg_update_"+start_report+".xlsx",sheet_name='CMARoster')
+january = pd.read_excel("G:\\sent\\hpmg_update_"+start_report+".xlsx",sheet_name='CMARoster')
 
 january.rename(columns={'Fed Tax ID':'TIN'}, inplace=True)
 
@@ -43,7 +43,7 @@ Raw_Jan_Roster=january.sort_values(by=['Last Name','NPI'])
 
 #Pulling in full ACO overlaps list
 
-overlaps = pd.read_csv("S:\\Clinical Analysis\\Employee Folders\\Daniel Padilla\\HealthPlanX Retention\\2024\\HealthPlanX Full Overlaps.csv")
+overlaps = pd.read_csv("S:Daniel Padilla\\HealthPlanX Retention\\2024\\HealthPlanX Full Overlaps.csv")
 
 overlaps.rename(columns={'Fed Tax ID':'TIN', 'NPI&TIN':'NPI_TIN'}, inplace=True)
 
@@ -84,7 +84,7 @@ January_Roster.rename(columns={'NPI_x':'NPI','TIN_x':'TIN','First Name_x':'First
 
 #Pulling in most recent roster
 
-current = pd.read_excel("G:\\Outgoing Data\\ACO\\HealthPlanXPPO_providerAddsAndDeletes\\sent\\hpmg_update_"+current_report+".xlsx",sheet_name='CMARoster')
+current = pd.read_excel("G:\\sent\\hpmg_update_"+current_report+".xlsx",sheet_name='CMARoster')
 
 current.rename(columns={'Fed Tax ID':'TIN'}, inplace=True)
 
