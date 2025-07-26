@@ -30,7 +30,7 @@ with engine.begin() as conn:
 
 odbc_str = ("DRIVER={ODBC Driver 17 for SQL Server};"
              "Server=servername;"
-             "Database=Informatics;"
+             "Database=db;"
              "Trusted_Connection=yes;")
 params = urllib.parse.quote_plus(odbc_str)
 engine = create_engine(f"mssql+pyodbc:///?odbc_connect={params}", fast_executemany=True)
