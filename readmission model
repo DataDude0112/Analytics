@@ -9,12 +9,12 @@ from tableone import TableOne
 
 #import data from sql server
 cnxn_str = ("DRIVER={ODBC Driver 17 for SQL Server};"
-             "Server=informaticsserver;"
-             "Database=informatics;"
+             "Server=server;"
+             "Database=db;"
              "Trusted_Connection=yes;")
 conn = pyodbc.connect(cnxn_str)
 cursor = conn.cursor()
-query = "select * from informatics.dbo.drp_readmissions_model"
+query = "select * from db.dbo.drp_readmissions_model"
 df = pd.read_sql_query(query, conn)
 conn.close()
 
@@ -28,7 +28,7 @@ categorical = ['RKK','PCP_Within_Seven_Days_DC','PCP_Spec_Within_Seven_Days_DC',
 groupby = 'Has ReadmitFlag1-30'
 table1 = TableOne(df, columns=columns, categorical=categorical, groupby=groupby, pval=True)
 print(table1)
-table1.to_excel(r"C:\Users\Daniel Padilla\Daniel Padilla - One Drive\Readmissions and Office Visit Report\Readmissions_and_office_visit_table1.xlsx",sheet_name='Intro')
+table1.to_excel(r"C:\Daniel Padilla - One Drive\Readmissions and Office Visit Report\Readmissions_and_office_visit_table1.xlsx",sheet_name='Intro')
 
 #selecting features
 selected_features = ['RKK','PCP_Within_Seven_Days_DC','ageband','Has ReadmitFlag1-30','LOBName','patientgender','Length of Stay','admitquarter','MemberRegionName','RiskScore','HPI_Pctile']
