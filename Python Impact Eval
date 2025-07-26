@@ -6,8 +6,8 @@ import numpy as np
 import pyodbc
 
 cnxn_str = ("Driver={SQL Server};"
-             "Server=Informatics;"
-             "Database=Informatics;"
+             "Server=server;"
+             "Database=db;"
              "Trusted_Connection=yes;")
 
 conn = pyodbc.connect(cnxn_str)
