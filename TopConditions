@@ -10,7 +10,7 @@
 drop table if exists #test
 select distinct pat_uid
 into #test
-from [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024]
+from [dbo].[SymmetryOur_CompanyDescHist_2024]
 where 1=1
 and loadperiod = '202510'
 and left (ERG_RISK_MARKER,6) = '164700'
