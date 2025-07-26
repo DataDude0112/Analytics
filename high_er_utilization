@@ -20,9 +20,6 @@ order by 'Total ER Visits' desc
 
 --select count (*) Cnt_Rws, count (distinct masterpatientid) Dcnt_Pt, sum([Total ER Visits]) Sum_ER
 --from #start
---3,944 Rows
---3,944 Distinct MasterPatientID's
---17,399 ER Visits
 
 
 drop table if exists #elig_1
@@ -64,7 +61,7 @@ select case when LineOfBusinessName = 'Commercial' then 1
 ,[HMO Assigned Provider Tax ID]
 into #elig_1
 from #start s
-left join server.db.[dbo].EligibilityDetails e
+left join server.db.[dbo].Eligibilitytable e
 on s.MasterPatientID = e.MasterPatientID
 where 1=1
 and [Incurred Date] = @incurred_date								
@@ -73,8 +70,7 @@ and e.MasterPatientID is not null
 
 --select count (*) Cnt_Rws, count(distinct MasterPatientID) Dcnt_Pt
 --from #elig_1
---3,430 Rows
---3,346 Distinct MasterPatientID's
+
 
 
 drop table if exists #elig_2
@@ -92,8 +88,6 @@ where rn = 1
 
 --select count (*) Cnt_Rws, count(distinct MasterPatientID) Dcnt_Pt
 --from #elig_3
---3,346 Rows
---3,346 Distinct MasterPatientID's
 
 
 drop table if exists #clms
@@ -129,7 +123,7 @@ else '' end LOB_Name
 ,case when [Servicing Provider Division Code] not in ('XRAY', 'LABR', 'FACL','EMER' ) and [POS Code] in ('11','20','49','50','02','10','2') then datediff(dd,[Date of Service Date],getdate()) else null end as 'Days Since PCP or Specialist'
 into #clms
 from #elig_3 h
-left join server.db.[dbo].ClaimDetails c
+left join server.db.[dbo].Claimstable c
 on h.MasterPatientID = c.MasterPatientID
 where 1=1											
 and [Date of Service Date] between @clms_start and @clms_end	
@@ -140,9 +134,7 @@ order by DOS asc
 
 --select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt, sum ([ER Visit]) Sum_ER
 --from #clms
---323,538 Rows
---3,346 Distinct Master PatientID's
---14,684 ER Visits
+
 
 
 drop table if exists #most_recent_1
@@ -169,8 +161,6 @@ where rn = 1
 
 --select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
 --from #most_recent
---2,901 Rows
---2,901 Distinct MasterPatientID's
 
 
 
@@ -183,13 +173,11 @@ select row_number () over (partition by e.MasterPatientID order by e.[Incurred D
 , a.MasterPatientID
 into #em0
 from #elig_3 a
-left join server.db.[dbo].EligibilityDetails e
+left join server.db.[dbo].Eligibilitytable e
 on a.MasterPatientID = e.MasterPatientID
 
 --select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
 --from #em0
---107,592 Rows
---3,346 Distinct MasterPatientID's
 
 
 
@@ -201,8 +189,6 @@ from #em0
 
 --select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
 --from #em1
---107,592 Rows
---3,346 Distinct MasterPatientID's
 
 
 
@@ -215,8 +201,6 @@ from #em1
 
 --select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
 --from #em2
---107,592 Rows
---3,346 Distinct MasterPatientID's
 
 
 
@@ -230,8 +214,6 @@ group by MasterPatientID
 
 --select count (*) Dcnt_Rws, count (distinct masterpatientid) Dcnt_Pt
 --from #elig_months
---3,346 Rows
---3,346 Distinct MasterPatientID's
 
 
 drop table if exists #cm
@@ -243,7 +225,7 @@ select EnterpriseID Patient
 , EpisodeClassification 'CM Episode Class.'
 , EpisodeUserName
 into #cm
-from [dwsqlp1prod].EPIC_Reporting.dbo.EncountersCompleteInfo 
+from [server].db.dbo.EncountersCompleteInfo 
 where 1=1
 and EnterpriseID is not null	
 and EpisodeClassification in ('HP High-Risk Care Management', 'HP Transitional Care Management', 'CM - Welcome Home')
@@ -300,9 +282,6 @@ select count (distinct masterpatientid) as dcnt_masterptid
 , sum ([ER Visit]) as sum_ervisits
 , count (*) as row_cnt
 from #final
---3,661 pts
---16,158 er visits
---374,988 rows
 
 
 --select *
