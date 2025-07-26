@@ -26,7 +26,7 @@ select distinct row_number () over (partition by pat_uid order by pat_uid) rn
 , HealthPlanName
 , case when SubProductCode = 'LKK' then 'RKK' else 'Non-RKK' end as RKK
 , case when (AidCategoryCode = 'DSNP' and [Incurred YearMonth] >= '202401' or (AidCategoryCode = 'SNP' and [Incurred YearMonth] < '202401' and HealthPlanShortCode not in ('BD'))) then 'DSNP' else 'Non-DSNP' end as DSNP 
-	from [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s
+	from [dbo].[SymmetryOur_CompanyDescHist_2024] s
 		left join elig e
 		on s.pat_uid = e.MasterPatientID
 where 1=1
@@ -54,7 +54,7 @@ drop table if exists infor.dbo.drp_topconditions_conditions
 select distinct ERG, ERGArrayDescription, pat_uid
 from 
 	(select distinct pat_uid, ERG_RISK_MARKER as ERG, ERGArrayDescription, row_number () over (partition by ERG_RISK_MARKER order by ERGArrayDescription desc) rn 
-		from [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s2) as erg
+		from [dbo].[SymmetryOur_CompanyDescHist_2024] s2) as erg
 where rn = 1)
 select p.PAT_UID
 , s.ERG_RISK_MARKER as ERG
@@ -63,11 +63,11 @@ select p.PAT_UID
 , l.*
 into infor.dbo.drp_topconditions_conditions
 	from infor.dbo.drp_topconditions_pts p
-		left join [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s
+		left join [dbo].[SymmetryOur_CompanyDescHist_2024] s
 		on p.PAT_UID = s.PAT_UID
 			left join (select p.pat_uid, count (distinct s.ERG_RISK_MARKER) as cond_count 
 			from infor.dbo.drp_topconditions_pts p 
-			left join [SYMMETRY_EIGHT].[dbo].[SymmetryOur_CompanyDescHist_2024] s on p.PAT_UID = s.PAT_UID where loadperiod = '202510' group by p.pat_uid) cond_cnt
+			left join [dbo].[SymmetryOur_CompanyDescHist_2024] s on p.PAT_UID = s.PAT_UID where loadperiod = '202510' group by p.pat_uid) cond_cnt
 			on p.pat_uid = cond_cnt.pat_uid
 				left join deschist d
 				on s.erg_risk_marker = d.ERG
@@ -116,7 +116,7 @@ drop table if exists infor.dbo.drp_topconditions_symclms
 select s.PAT_UID, AmountAllowed, ProcedureCode, [Procedure Code Short Description], DiagCode1, DX1_ShortDesc FirstDtService, UniqueRecordID, PlaceOfService, claim, ETGNumber 
 into infor.dbo.drp_topconditions_symclms
 from infor.dbo.drp_topconditions_pts p
-left join [SYMMETRY_EIGHT].[dbo].SymmetryOur_CompanyClaims_2024 s
+left join [dbo].SymmetryOur_CompanyClaims_2024 s
 on p.pat_uid = s.pat_uid
 join clms c
 on s.Claim = c.[Claim Number]
@@ -180,7 +180,7 @@ select row_number () over (partition by EnterpriseID order by cast(EncounterEntr
 , EncounterID
 , ProgramStatus
 	from infor.dbo.drp_topconditions_pts p
-		left join [dwsqlp1prod].EPIC_Reporting.dbo.EncountersCompleteInfo cm
+		left join dbo.EncountersCompleteInfo cm
 		on p.pat_uid = cm.enterpriseid
 where 1=1
 and EnterpriseID is not null	
