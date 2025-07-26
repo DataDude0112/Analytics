@@ -187,7 +187,7 @@ proc sql;
 			, A.CPT1, A.CPT2, A.CPT3, A.CPT4, A.CPT5, A.CPT6)
 		as AuthID /*Added for unique ID deduping AuthNumber when submitted
 			multiple times */
-	FROM db.AuthDetails A
+	FROM db.Authtable A
 		WHERE 1=1
 			AND (  CPT1 IN (select code from sasuser.gr_codes_&specialty) /*At least one CPT code listed on an authorization must be part of the platinum role*/
 			OR CPT2 IN (select code from sasuser.gr_codes_&specialty)
