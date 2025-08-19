@@ -8,20 +8,20 @@ import matplotlib.pyplot as plt
 
 
 #pulling in data from excel file
-navi1 = pd.read_excel("C:\\Users\\Daniel Padilla\\Daniel Padilla - One Drive\\HealthPlanX\\2024\\HealthPlanX Data.xlsx",sheet_name='TP1 Data')
+HP1 = pd.read_excel("C:\\Users\\Daniel Padilla\\HealthPlanX\\2024\\HealthPlanX Data.xlsx",sheet_name='TP1 Data')
 
 
 regions_of_interest = ['San Francisco','East Bay']
-navi1 = navi1[(navi1['LOB'] == 'Medicare') & (navi1['Region'].isin(regions_of_interest))]
-#print(navi1)
+HP1 = HP1[(HP1['LOB'] == 'Medicare') & (HP1['Region'].isin(regions_of_interest))]
+#print(HP1)
 
 
-dummies = pd.get_dummies(navi1, columns=['Region', 'Sex'], dtype='float')
-navi1 = dummies
+dummies = pd.get_dummies(HP1, columns=['Region', 'Sex'], dtype='float')
+HP1 = dummies
 
 
 plt.figure(figsize=(5, 3))
-sns.histplot(data=navi1, x='Age', hue='HealthPlanX', kde=True, element='step', stat='density', common_norm=False)
+sns.histplot(data=HP1, x='Age', hue='HealthPlanX', kde=True, element='step', stat='density', common_norm=False)
 
 # Add titles and labels
 plt.title('Distribution of RetroRiskScore Between Treated and Untreated Groups')
@@ -36,31 +36,31 @@ import statsmodels.api as sm
 
 covariates = ['Sex_F', 'Sex_M', 'Age', 'retrorisk', 'SNFAdmitsFromIP','Year_2021', 'Year_2022', 'Year_2023', 'Q1', 'Q2', 'Q3', 'Q4', 'Region_East Bay', 'Region_San Francisco']
 
-model = sm.Logit(navi1['HealthPlanX'], sm.add_constant(navi1[covariates]))
+model = sm.Logit(HP1['HealthPlanX'], sm.add_constant(HP1[covariates]))
 result = model.fit(maxiter=10000, tol=1e-4)  # Increase max iterations and adjust tolerance
 
-navi1['propensity_score'] = result.predict(sm.add_constant(navi1[covariates]))
-#print(navi1[['HealthPlanX','propensity_score']])
+HP1['propensity_score'] = result.predict(sm.add_constant(HP1[covariates]))
+#print(HP1[['HealthPlanX','propensity_score']])
 
 
-navi1['weight'] = np.where(navi1['HealthPlanX'] == 1, 
-                          1 / navi1['propensity_score'], 
-                          1 / (1 - navi1['propensity_score']))
-#print(navi1[['HealthPlanX','propensity_score','weight']])
+HP1['weight'] = np.where(HP1['HealthPlanX'] == 1, 
+                          1 / HP1['propensity_score'], 
+                          1 / (1 - HP1['propensity_score']))
+#print(HP1[['HealthPlanX','propensity_score','weight']])
 
-navi1.to_excel(r"C:\Users\DRP03675\OneDrive - Hill Physicians Medical Group, Inc\Daniel Padilla\propscore_test.xlsx",sheet_name='Intro', index=False)
+HP1.to_excel(r"C:\Users\Daniel Padilla\propscore_test.xlsx",sheet_name='Intro', index=False)
 
 
-plt.hist(navi1[navi1['HealthPlanX'] == 1]['propensity_score'], bins=20, alpha=0.5, label='Treated')
-plt.hist(navi1[navi1['HealthPlanX'] == 0]['propensity_score'], bins=20, alpha=0.5, label='Untreated')
+plt.hist(HP1[HP1['HealthPlanX'] == 1]['propensity_score'], bins=20, alpha=0.5, label='Treated')
+plt.hist(HP1[HP1['HealthPlanX'] == 0]['propensity_score'], bins=20, alpha=0.5, label='Untreated')
 plt.xlabel('Propensity Score')
 plt.ylabel('Frequency')
 plt.title('Distribution of Propensity Scores')
 plt.legend()
 plt.show()
 
-plt.hist(navi1[navi1['HealthPlanX'] == 1]['weight'], bins=20, alpha=0.5, label='Treated')
-plt.hist(navi1[navi1['HealthPlanX'] == 0]['weight'], bins=20, alpha=0.5, label='Untreated')
+plt.hist(HP1[HP1['HealthPlanX'] == 1]['weight'], bins=20, alpha=0.5, label='Treated')
+plt.hist(HP1[HP1['HealthPlanX'] == 0]['weight'], bins=20, alpha=0.5, label='Untreated')
 plt.xlabel('Weight')
 plt.ylabel('Frequency')
 plt.title('Distribution of Weight')
