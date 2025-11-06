@@ -1,0 +1,23 @@
+drop table if exists #pop_ed1000
+select (sum(cast([er visit] as float)) / count(distinct(concat(YM, MasterPatientID)))) * 12000 as Population_ED_Per_1000
+into #pop_ed1000
+from #final
+
+select '' as ' '
+, PCP_NPI
+, PCP_Name
+, sum([ER Visit]) as Sum_ED
+, count (distinct MasterPatientID) as Dcount_Pt
+, count(distinct(concat(YM, MasterPatientID))) as Count_MM
+, avg(RetroRiskScore) as Avg_Retro_Risk_Score
+, Population_ED_Per_1000
+, (sum(cast([er visit] as float)) / count(distinct(concat(YM, MasterPatientID)))) * 12000 as Observed_ED_Per_1000
+, avg(RetroRiskScore) * Population_ED_Per_1000 as Expected_ED_1000
+, (sum(cast([er visit] as float)) / count(distinct(concat(YM, MasterPatientID)))) * 12000/nullif((avg(RetroRiskScore) * Population_ED_Per_1000),0) as Observed_Over_Expected
+, ((sum(cast([er visit] as float)) / count(distinct(concat(YM, MasterPatientID)))) * 12000)/nullif(avg(RetroRiskScore),0) as Adjusted_ED_1000
+from #final f
+cross join #pop_ed1000 p
+where 1=1
+and [Provider Div Code] = 'ADLT'
+group by Population_ED_Per_1000, PCP_NPI, PCP_Name
+order by Adjusted_ED_1000 desc
